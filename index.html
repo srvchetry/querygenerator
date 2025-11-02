@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAP OData Utterance Generator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .loading { border: 3px solid #f3f3f3; border-top: 3px solid #3498db; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; display: inline-block; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-indigo-900 mb-2">🎯 SAP OData Utterance Generator</h1>
+            <p class="text-gray-600">Generate training data from OData $metadata</p>
+        </div>
+
+        <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">📋 Configuration</h2>
+            
+            <div class="space-y-4">
+                <div class="bg-blue-50 border-l-4 border-blue-500 p-4 mb-4">
+                    <p class="text-sm text-blue-900">
+                        <strong>📌 Three ways to provide entities:</strong><br>
+                        1. <strong>Best:</strong> $metadata URL (e.g., https://service.com/$metadata)<br>
+                        2. Service URL (we'll add /$metadata automatically)<br>
+                        3. Manual entity names (comma-separated)
+                    </p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Option 1: $metadata URL (Recommended)
+                    </label>
+                    <input type="url" id="metadataUrl" placeholder="https://services.odata.org/V2/Northwind/Northwind.svc/$metadata"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"/>
+                    <p class="text-xs text-gray-500 mt-1">Direct link to the OData $metadata XML</p>
+                </div>
+
+                <div class="text-center text-gray-400">OR</div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Option 2: Service Base URL
+                    </label>
+                    <input type="url" id="serviceUrl" placeholder="https://services.odata.org/V2/Northwind/Northwind.svc"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"/>
+                    <p class="text-xs text-gray-500 mt-1">We'll append /$metadata automatically</p>
+                </div>
+
+                <div class="text-center text-gray-400">OR</div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Option 3: Manual Entity Names
+                    </label>
+                    <input type="text" id="manualEntities" placeholder="Customers, Orders, Products, Employees"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"/>
+                    <p class="text-xs text-gray-500 mt-1">Comma-separated entity names from the API</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        API Key (Optional - if service requires authentication)
+                    </label>
+                    <input type="password" id="apiKeyHeader" placeholder="Your API key"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"/>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Anthropic API Key *
+                    </label>
+                    <input type="password" id="anthropicKey" placeholder="sk-ant-..."
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"/>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Utterances per Entity: <span id="utteranceCount">10</span>
+                    </label>
+                    <input type="range" id="utteranceSlider" min="5" max="30" value="10" class="w-full"/>
+                </div>
+
+                <div class="flex gap-3 pt-4">
+                    <button id="discoverBtn" 
+                        class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2">
+                        <span>🔍 Discover Entities</span>
+                    </button>
+                    <button id="generateBtn" 
+                        class="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                        <span>✨ Generate Utterances</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="statusArea" class="space-y-2 mb-6"></div>
+
+        <div id="entitiesSection" class="hidden bg-white rounded-lg shadow-lg p-6 mb-6 fade-in">
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">📊 Discovered Entities</h2>
+            <div id="entitiesContent"></div>
+        </div>
+
+        <div id="resultsSection" class="hidden bg-white rounded-lg shadow-lg p-6 fade-in">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-semibold text-gray-800">🎯 Generated Utterances</h2>
+                <div class="flex gap-2">
+                    <button id="exportAllBtn" 
+                        class="bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-200">
+                        📥 Export All
+                    </button>
+                    <button id="exportValidBtn" 
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg transition duration-200">
+                        ✅ Export Valid Only
+                    </button>
+                </div>
+            </div>
+            <div id="statsBar" class="bg-gray-100 rounded-lg p-4 mb-4"></div>
+            
+            <div class="bg-yellow-50 border-l-4 border-yellow-500 p-4 mb-4">
+                <p class="text-sm text-yellow-900">
+                    💡 <strong>Validation:</strong> Click "Test" on each utterance to validate it against your API. 
+                    Only validated utterances can be exported with the "Export Valid Only" button.
+                </p>
+            </div>
+            
+            <div id="resultsContent" class="space-y-3 max-h-96 overflow-y-auto"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+        let discoveredEntities = {};
+        let generatedDataset = [];
+
+        document.getElementById('utteranceSlider').addEventListener('input', (e) => {
+            document.getElementById('utteranceCount').textContent = e.target.value;
+        });
+
+        function addStatus(message, type = 'info') {
+            const statusArea = document.getElementById('statusArea');
+            const colors = {
+                info: 'bg-blue-100 border-blue-400 text-blue-700',
+                success: 'bg-green-100 border-green-400 text-green-700',
+                error: 'bg-red-100 border-red-400 text-red-700',
+            };
+            const div = document.createElement('div');
+            div.className = `${colors[type]} border-l-4 p-4 fade-in`;
+            div.innerHTML = `<p class="text-sm">${message}</p>`;
+            statusArea.appendChild(div);
+            if (type === 'success') setTimeout(() => div.remove(), 8000);
+        }
+
+        function clearStatus() {
+            document.getElementById('statusArea').innerHTML = '';
+        }
+
+        function setLoading(button, isLoading, text) {
+            const span = button.querySelector('span');
+            if (isLoading) {
+                button.disabled = true;
+                span.innerHTML = `<span class="loading mr-2"></span>${text}`;
+            } else {
+                button.disabled = false;
+                span.textContent = text;
+            }
+        }
+
+        document.getElementById('discoverBtn').addEventListener('click', async () => {
+            clearStatus();
+            const metadataUrl = document.getElementById('metadataUrl').value.trim();
+            const serviceUrl = document.getElementById('serviceUrl').value.trim();
+            const manualEntities = document.getElementById('manualEntities').value.trim();
+            const apiKeyHeader = document.getElementById('apiKeyHeader').value.trim();
+            const anthropicKey = document.getElementById('anthropicKey').value.trim();
+
+            if (!anthropicKey) {
+                addStatus('⚠️ Anthropic API Key is required', 'error');
+                return;
+            }
+
+            if (!metadataUrl && !serviceUrl && !manualEntities) {
+                addStatus('⚠️ Please provide metadata URL, service URL, or manual entity names', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('discoverBtn');
+
+            try {
+                if (manualEntities) {
+                    // Manual entity input
+                    setLoading(btn, true, 'Processing entities...');
+                    addStatus('📝 Processing manual entity input...', 'info');
+
+                    const entityNames = manualEntities.split(',').map(e => e.trim()).filter(e => e);
+                    
+                    const response = await fetch(`${API_BASE}/manual-entities`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ entity_names: entityNames })
+                    });
+
+                    if (!response.ok) throw new Error('Failed to process entities');
+                    const data = await response.json();
+                    discoveredEntities = data.entities;
+                    
+                } else {
+                    // Fetch from metadata
+                    setLoading(btn, true, 'Fetching metadata...');
+                    addStatus('🔍 Fetching OData metadata...', 'info');
+
+                    const response = await fetch(`${API_BASE}/fetch-metadata`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            metadata_url: metadataUrl,
+                            service_url: serviceUrl,
+                            api_key_header: apiKeyHeader
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.error || 'Failed to fetch metadata');
+                    }
+
+                    const data = await response.json();
+                    discoveredEntities = data.entities;
+                }
+
+                displayEntities(discoveredEntities);
+                addStatus(`✅ Found ${Object.keys(discoveredEntities).length} entities!`, 'success');
+                document.getElementById('generateBtn').disabled = false;
+
+            } catch (error) {
+                addStatus(`❌ ${error.message}`, 'error');
+            } finally {
+                setLoading(btn, false, '🔍 Discover Entities');
+            }
+        });
+
+        function displayEntities(entities) {
+            const section = document.getElementById('entitiesSection');
+            const content = document.getElementById('entitiesContent');
+            const count = Object.keys(entities).length;
+
+            content.innerHTML = `
+                <div class="bg-indigo-50 rounded-lg p-4 mb-4">
+                    <h3 class="font-semibold text-indigo-900 mb-2">Total Entities: ${count}</h3>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    ${Object.keys(entities).map(e => 
+                        `<span class="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm">${e}</span>`
+                    ).join('')}
+                </div>
+            `;
+            section.classList.remove('hidden');
+        }
+
+        document.getElementById('generateBtn').addEventListener('click', async () => {
+            clearStatus();
+            const anthropicKey = document.getElementById('anthropicKey').value.trim();
+            const utteranceCount = parseInt(document.getElementById('utteranceSlider').value);
+            
+            const btn = document.getElementById('generateBtn');
+            setLoading(btn, true, 'Generating...');
+            generatedDataset = [];
+
+            const entities = Object.keys(discoveredEntities).slice(0, 5);
+            addStatus(`🎯 Generating for ${entities.length} entities...`, 'info');
+
+            try {
+                for (const entity of entities) {
+                    const response = await fetch(`${API_BASE}/generate-utterances`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            entity,
+                            entity_info: discoveredEntities[entity],
+                            api_key: anthropicKey,
+                            count: utteranceCount
+                        })
+                    });
+
+                    if (!response.ok) throw new Error(`Failed for ${entity}`);
+                    const data = await response.json();
+                    data.utterances.forEach(u => generatedDataset.push({ ...u, entity }));
+                    addStatus(`✅ Generated for ${entity}`, 'success');
+                }
+
+                displayResults(generatedDataset);
+                addStatus(`🎉 Generated ${generatedDataset.length} total utterances!`, 'success');
+
+            } catch (error) {
+                addStatus(`❌ ${error.message}`, 'error');
+            } finally {
+                setLoading(btn, false, '✨ Generate Utterances');
+            }
+        });
+
+        function displayResults(dataset) {
+            const section = document.getElementById('resultsSection');
+            const statsBar = document.getElementById('statsBar');
+            const content = document.getElementById('resultsContent');
+
+            const byComplexity = dataset.reduce((acc, d) => {
+                acc[d.complexity] = (acc[d.complexity] || 0) + 1;
+                return acc;
+            }, {});
+
+            const validated = dataset.filter(d => d.validated === true).length;
+            const failed = dataset.filter(d => d.validated === false).length;
+            const untested = dataset.filter(d => d.validated === undefined).length;
+
+            statsBar.innerHTML = `
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+                    <div class="text-center bg-white p-3 rounded-lg">
+                        <div class="text-3xl font-bold text-indigo-600">${dataset.length}</div>
+                        <div class="text-sm text-gray-600">Total</div>
+                    </div>
+                    <div class="text-center bg-white p-3 rounded-lg">
+                        <div class="text-3xl font-bold text-green-600">${validated}</div>
+                        <div class="text-sm text-gray-600">✅ Valid</div>
+                    </div>
+                    <div class="text-center bg-white p-3 rounded-lg">
+                        <div class="text-3xl font-bold text-red-600">${failed}</div>
+                        <div class="text-sm text-gray-600">❌ Failed</div>
+                    </div>
+                    <div class="text-center bg-white p-3 rounded-lg">
+                        <div class="text-3xl font-bold text-gray-600">${untested}</div>
+                        <div class="text-sm text-gray-600">⏳ Untested</div>
+                    </div>
+                    ${Object.entries(byComplexity).slice(0, 1).map(([k, v]) => `
+                        <div class="text-center bg-white p-3 rounded-lg">
+                            <div class="text-3xl font-bold text-purple-600">${v}</div>
+                            <div class="text-sm text-gray-600">${k}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+
+            content.innerHTML = dataset.map((item, index) => {
+                let statusClass = 'bg-gray-50';
+                let statusBadge = '';
+                
+                if (item.validated === true) {
+                    statusClass = 'bg-green-50 border-green-200';
+                    statusBadge = '<span class="bg-green-500 text-white text-xs px-2 py-1 rounded">✅ Valid</span>';
+                } else if (item.validated === false) {
+                    statusClass = 'bg-red-50 border-red-200';
+                    statusBadge = '<span class="bg-red-500 text-white text-xs px-2 py-1 rounded">❌ Failed</span>';
+                }
+                
+                return `
+                <div class="${statusClass} rounded-lg p-4 border hover:shadow-md transition" data-index="${index}">
+                    <div class="flex justify-between items-start mb-2">
+                        <div class="flex-1">
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded">${item.entity}</span>
+                                <span class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded">${item.complexity}</span>
+                                ${statusBadge}
+                            </div>
+                            <p class="text-gray-800 font-medium">${item.utterance}</p>
+                        </div>
+                        <button class="test-btn ml-4 px-4 py-2 ${item.validated !== undefined ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'} text-white text-sm rounded-lg transition" 
+                                data-index="${index}" ${item.validating ? 'disabled' : ''}>
+                            ${item.validating ? '⏳ Testing...' : '🧪 Test'}
+                        </button>
+                    </div>
+                    <div class="bg-gray-900 text-green-400 p-3 rounded text-sm font-mono overflow-x-auto mb-2">
+                        ${item.suggested_endpoint}
+                    </div>
+                    ${item.validation_message ? `
+                        <div class="text-xs ${item.validated ? 'text-green-700' : 'text-red-700'} mt-2">
+                            ${item.validation_message}
+                        </div>
+                    ` : ''}
+                </div>
+            `}).join('');
+
+            // Attach event listeners to test buttons
+            document.querySelectorAll('.test-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const index = parseInt(e.target.dataset.index);
+                    testEndpoint(index);
+                });
+            });
+
+            section.classList.remove('hidden');
+        }
+
+        async function testEndpoint(index) {
+            const item = generatedDataset[index];
+            const serviceUrl = document.getElementById('serviceUrl').value.trim() || 
+                              document.getElementById('metadataUrl').value.trim().replace('/$metadata', '');
+            const apiKeyHeader = document.getElementById('apiKeyHeader').value.trim();
+
+            if (!serviceUrl) {
+                addStatus('⚠️ Please provide a service URL to test endpoints', 'error');
+                return;
+            }
+
+            // Mark as validating
+            item.validating = true;
+            displayResults(generatedDataset);
+
+            try {
+                const response = await fetch(`${API_BASE}/validate-endpoint`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        service_url: serviceUrl,
+                        endpoint: item.suggested_endpoint,
+                        api_key_header: apiKeyHeader
+                    })
+                });
+
+                const result = await response.json();
+                
+                item.validated = result.success;
+                item.validation_message = result.message;
+                item.status_code = result.status_code;
+                
+                if (result.success) {
+                    addStatus(`✅ Valid: ${item.utterance.substring(0, 50)}...`, 'success');
+                } else {
+                    addStatus(`❌ Failed (${result.status_code}): ${item.utterance.substring(0, 50)}...`, 'error');
+                }
+
+            } catch (error) {
+                item.validated = false;
+                item.validation_message = `Error: ${error.message}`;
+                addStatus(`❌ Test error: ${error.message}`, 'error');
+            } finally {
+                item.validating = false;
+                displayResults(generatedDataset);
+            }
+        }
+
+        document.getElementById('exportAllBtn').addEventListener('click', () => {
+            const blob = new Blob([JSON.stringify(generatedDataset, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `odata_utterances_all_${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            addStatus(`✅ Exported all ${generatedDataset.length} utterances!`, 'success');
+        });
+
+        document.getElementById('exportValidBtn').addEventListener('click', () => {
+            const validOnly = generatedDataset.filter(d => d.validated === true);
+            
+            if (validOnly.length === 0) {
+                addStatus('⚠️ No validated utterances to export. Test some first!', 'error');
+                return;
+            }
+
+            const blob = new Blob([JSON.stringify(validOnly, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `odata_utterances_valid_${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            addStatus(`✅ Exported ${validOnly.length} valid utterances!`, 'success');
+        });
+    </script>
+</body>
+</html>
