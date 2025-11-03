@@ -386,14 +386,29 @@
                 const successCount = Object.keys(sampleDataCache).filter(k => !sampleDataCache[k].error).length;
                 addStatus(`✅ Fetched sample data from ${successCount} entities!`, 'success');
                 
-                // Show summary
-                let summaryMsg = '📊 Sample Data Summary:\n';
+                // Show detailed summary
+                let detailsHtml = '<div class="mt-4 p-4 bg-teal-50 border border-teal-200 rounded-lg"><h4 class="font-semibold text-teal-900 mb-2">📊 Sample Data Summary:</h4><ul class="text-sm text-teal-800 space-y-1">';
+                
                 for (const [entity, sample] of Object.entries(sampleDataCache)) {
-                    if (sample.record_count) {
-                        summaryMsg += `\n• ${entity}: ${sample.record_count} records`;
+                    if (sample.record_count > 0) {
+                        const propCount = Object.keys(sample.sample_values || {}).length;
+                        detailsHtml += `<li>✅ <strong>${entity}</strong>: ${sample.record_count} records, ${propCount} properties with values</li>`;
+                    } else if (sample.error) {
+                        detailsHtml += `<li>❌ <strong>${entity}</strong>: ${sample.error}</li>`;
+                    } else {
+                        detailsHtml += `<li>⚠️ <strong>${entity}</strong>: No records found (empty table)</li>`;
                     }
                 }
-                console.log(summaryMsg);
+                
+                detailsHtml += '</ul></div>';
+                
+                const statusArea = document.getElementById('statusArea');
+                const div = document.createElement('div');
+                div.className = 'fade-in';
+                div.innerHTML = detailsHtml;
+                statusArea.appendChild(div);
+                
+                console.log('Sample data cache:', sampleDataCache);
 
             } catch (error) {
                 addStatus(`❌ ${error.message}`, 'error');
@@ -515,6 +530,25 @@
             clearStatus();
             const anthropicKey = document.getElementById('anthropicKey').value.trim();
             const utteranceCount = parseInt(document.getElementById('utteranceSlider').value);
+            
+            // Check if sample data was fetched
+            const hasSampleData = Object.keys(sampleDataCache).length > 0;
+            if (!hasSampleData) {
+                const confirmWithoutSamples = confirm(
+                    '⚠️ WARNING: You haven\'t fetched sample data yet!\n\n' +
+                    'Without sample data, queries may use fictional values that don\'t exist in your database.\n' +
+                    'This will likely result in validation failures (0 results).\n\n' +
+                    '📊 Recommendation: Click "Fetch Sample Data" first for best results.\n\n' +
+                    'Continue anyway?'
+                );
+                
+                if (!confirmWithoutSamples) {
+                    return;
+                }
+                addStatus('⚠️ Generating without sample data - queries may not match real data', 'error');
+            } else {
+                addStatus('✅ Using sample data for realistic queries', 'success');
+            }
             
             const btn = document.getElementById('generateBtn');
             setLoading(btn, true, 'Generating...');

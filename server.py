@@ -522,22 +522,47 @@ Make the utterances sound natural and conversational, reflecting how {persona.ge
         
         # Build sample values context
         sample_values_context = ""
-        if sample_data and 'sample_values' in sample_data:
-            sample_values_context = "\n\nREAL VALUES FROM API (use these in your queries):\n"
-            for prop, values in list(sample_data['sample_values'].items())[:20]:  # Limit to 20 properties
-                if values:
-                    sample_values_context += f"- {prop}: {', '.join([repr(v) for v in values[:5]])}\n"
+        has_sample_data = False
+        
+        if sample_data and 'sample_values' in sample_data and sample_data['sample_values']:
+            has_sample_data = True
+            sample_values_context = "\n\n🎯 REAL VALUES FROM API DATABASE (MANDATORY TO USE):\n"
+            sample_values_context += "="*60 + "\n"
             
+            for prop, values in list(sample_data['sample_values'].items())[:25]:  # Show more properties
+                if values and len(values) > 0:
+                    # Format values nicely
+                    formatted_values = ', '.join([f"'{v}'" if isinstance(v, str) else str(v) for v in values[:8]])
+                    sample_values_context += f"• {prop}: {formatted_values}\n"
+            
+            sample_values_context += "="*60 + "\n"
             sample_values_context += f"""
-IMPORTANT: Use these ACTUAL values in your filter conditions!
-- These are real values from the database
-- Guaranteed to return results when tested
-- Use exact values (case-sensitive for strings)
+🚨 CRITICAL INSTRUCTIONS FOR USING SAMPLE DATA:
 
-Example good queries using real data:
-- If Country values are ['DE', 'US', 'GB'], use: $filter=Country eq 'DE'
-- If Status values are ['ACTIVE', 'INACTIVE'], use: $filter=Status eq 'ACTIVE'
-- Don't invent values that aren't in the list above
+1. **ONLY use values listed above** in your filter conditions
+2. **DO NOT invent or guess values** - stick to what's shown
+3. **Match EXACT casing** - 'Active' ≠ 'ACTIVE' ≠ 'active'
+4. **Use values that will return results** - all values above exist in the database
+
+GOOD EXAMPLES (using real values):
+- If Country shows ['DE', 'US', 'GB']: Use $filter=Country eq 'DE'  ✅
+- If Status shows ['ACTIVE', 'CLOSED']: Use $filter=Status eq 'ACTIVE'  ✅
+- If Price shows ['99.99', '149.50', '299.00']: Use $filter=Price eq 99.99  ✅
+
+BAD EXAMPLES (inventing values):
+- $filter=Country eq 'France'  ❌ (not in the list - will return 0 results)
+- $filter=Status eq 'Pending'  ❌ (not in the list - will return 0 results)
+- $filter=Price eq 999.99  ❌ (not in the list - will return 0 results)
+
+📊 Sample record count: {sample_data.get('record_count', 0)} records available
+✅ All filters using these values are GUARANTEED to return results
+"""
+        else:
+            sample_values_context = """
+⚠️ WARNING: No sample data available. Generating generic queries.
+- These queries may not match your actual data
+- Validation may fail if values don't exist in database
+- For best results, fetch sample data first using the "📊 Fetch Sample Data" button
 """
         
         message = client.messages.create(
@@ -560,9 +585,12 @@ Create diverse queries with varying complexity:
 
 SIMPLE (40% - everyday queries):
 - Natural, conversational questions
-- Basic data retrieval
-- Simple filters
-Examples: "Show me all customers", "Get orders from last week", "Find products under $50"
+- Basic data retrieval without filters (to ensure results)
+- Simple filters **ONLY using the exact values from the REAL VALUES list above**
+Examples: 
+  • "Show me all {entity}" → /{entity}?$top=20
+  • "Get the first 10 {entity}" → /{entity}?$top=10
+  • If Status=['ACTIVE']: "Show active records" → $filter=Status eq 'ACTIVE'
 
 MEDIUM (40% - specific business queries):
 - Filtering by specific criteria
