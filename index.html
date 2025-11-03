@@ -65,10 +65,45 @@
 
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">
-                        API Key (Optional - if service requires authentication)
+                        Authentication Type (Optional)
+                    </label>
+                    <select id="authType" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+                        <option value="none">None</option>
+                        <option value="apikey">API Key</option>
+                        <option value="basic">Basic Auth</option>
+                        <option value="bearer">Bearer Token</option>
+                    </select>
+                </div>
+
+                <div id="authApiKey" class="hidden">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        API Key
                     </label>
                     <input type="password" id="apiKeyHeader" placeholder="Your API key"
                         class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"/>
+                    <p class="text-xs text-gray-500 mt-1">Will be sent as "APIKey" header</p>
+                </div>
+
+                <div id="authBasic" class="hidden">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Username
+                    </label>
+                    <input type="text" id="basicUsername" placeholder="username"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent mb-3"/>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Password
+                    </label>
+                    <input type="password" id="basicPassword" placeholder="password"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"/>
+                </div>
+
+                <div id="authBearer" class="hidden">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Bearer Token
+                    </label>
+                    <input type="password" id="bearerToken" placeholder="Your bearer token"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"/>
+                    <p class="text-xs text-gray-500 mt-1">Will be sent as "Authorization: Bearer {token}"</p>
                 </div>
 
                 <div>
@@ -104,6 +139,19 @@
         <div id="entitiesSection" class="hidden bg-white rounded-lg shadow-lg p-6 mb-6 fade-in">
             <h2 class="text-2xl font-semibold text-gray-800 mb-4">📊 Discovered Entities</h2>
             <div id="entitiesContent"></div>
+            
+            <div class="mt-6 pt-6 border-t">
+                <button id="suggestPersonasBtn"
+                    class="bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2">
+                    <span>👥 Suggest User Personas</span>
+                </button>
+            </div>
+        </div>
+
+        <div id="personasSection" class="hidden bg-white rounded-lg shadow-lg p-6 mb-6 fade-in">
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">👥 User Personas</h2>
+            <p class="text-gray-600 mb-4">Select personas to generate more natural, role-specific utterances:</p>
+            <div id="personasContent" class="space-y-3"></div>
         </div>
 
         <div id="resultsSection" class="hidden bg-white rounded-lg shadow-lg p-6 fade-in">
@@ -136,7 +184,41 @@
     <script>
         const API_BASE = 'http://localhost:5000/api';
         let discoveredEntities = {};
+        let suggestedPersonas = [];
+        let selectedPersonas = [];
         let generatedDataset = [];
+
+        // Show/hide auth fields based on type
+        document.getElementById('authType').addEventListener('change', (e) => {
+            const authType = e.target.value;
+            document.getElementById('authApiKey').classList.add('hidden');
+            document.getElementById('authBasic').classList.add('hidden');
+            document.getElementById('authBearer').classList.add('hidden');
+            
+            if (authType === 'apikey') {
+                document.getElementById('authApiKey').classList.remove('hidden');
+            } else if (authType === 'basic') {
+                document.getElementById('authBasic').classList.remove('hidden');
+            } else if (authType === 'bearer') {
+                document.getElementById('authBearer').classList.remove('hidden');
+            }
+        });
+
+        function getAuthConfig() {
+            const authType = document.getElementById('authType').value;
+            const config = { type: authType };
+            
+            if (authType === 'apikey') {
+                config.api_key = document.getElementById('apiKeyHeader').value.trim();
+            } else if (authType === 'basic') {
+                config.username = document.getElementById('basicUsername').value.trim();
+                config.password = document.getElementById('basicPassword').value.trim();
+            } else if (authType === 'bearer') {
+                config.token = document.getElementById('bearerToken').value.trim();
+            }
+            
+            return config;
+        }
 
         document.getElementById('utteranceSlider').addEventListener('input', (e) => {
             document.getElementById('utteranceCount').textContent = e.target.value;
@@ -176,7 +258,7 @@
             const metadataUrl = document.getElementById('metadataUrl').value.trim();
             const serviceUrl = document.getElementById('serviceUrl').value.trim();
             const manualEntities = document.getElementById('manualEntities').value.trim();
-            const apiKeyHeader = document.getElementById('apiKeyHeader').value.trim();
+            const authConfig = getAuthConfig();
             const anthropicKey = document.getElementById('anthropicKey').value.trim();
 
             if (!anthropicKey) {
@@ -220,7 +302,7 @@
                         body: JSON.stringify({
                             metadata_url: metadataUrl,
                             service_url: serviceUrl,
-                            api_key_header: apiKeyHeader
+                            auth_config: authConfig
                         })
                     });
 
@@ -262,6 +344,114 @@
             section.classList.remove('hidden');
         }
 
+        document.getElementById('suggestPersonasBtn').addEventListener('click', async () => {
+            const anthropicKey = document.getElementById('anthropicKey').value.trim();
+            
+            if (!anthropicKey) {
+                addStatus('⚠️ Anthropic API Key required', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('suggestPersonasBtn');
+            setLoading(btn, true, 'Analyzing entities...');
+            addStatus('🤔 Analyzing entities to suggest personas...', 'info');
+
+            try {
+                const response = await fetch(`${API_BASE}/suggest-personas`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        entities: discoveredEntities,
+                        api_key: anthropicKey
+                    })
+                });
+
+                if (!response.ok) throw new Error('Failed to suggest personas');
+
+                const data = await response.json();
+                suggestedPersonas = data.personas;
+                selectedPersonas = []; // Reset selection
+
+                displayPersonas(suggestedPersonas);
+                addStatus(`✅ Suggested ${suggestedPersonas.length} personas!`, 'success');
+
+            } catch (error) {
+                addStatus(`❌ ${error.message}`, 'error');
+            } finally {
+                setLoading(btn, false, '👥 Suggest User Personas');
+            }
+        });
+
+        function displayPersonas(personas) {
+            const section = document.getElementById('personasSection');
+            const content = document.getElementById('personasContent');
+
+            content.innerHTML = `
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    ${personas.map(persona => `
+                        <div class="border rounded-lg p-4 hover:shadow-md transition cursor-pointer persona-card" data-persona-id="${persona.id}">
+                            <div class="flex items-start justify-between mb-2">
+                                <div class="flex-1">
+                                    <h3 class="font-semibold text-lg text-gray-900">${persona.title}</h3>
+                                    <span class="text-xs px-2 py-1 rounded ${
+                                        persona.skill_level === 'beginner' ? 'bg-green-100 text-green-800' :
+                                        persona.skill_level === 'advanced' ? 'bg-red-100 text-red-800' :
+                                        'bg-blue-100 text-blue-800'
+                                    }">${persona.skill_level}</span>
+                                    <span class="text-xs px-2 py-1 rounded bg-purple-100 text-purple-800 ml-1">${persona.query_style}</span>
+                                </div>
+                                <input type="checkbox" class="persona-checkbox w-5 h-5 text-indigo-600" data-persona-id="${persona.id}">
+                            </div>
+                            <p class="text-sm text-gray-600 mb-3">${persona.description}</p>
+                            <div class="text-xs text-gray-500">
+                                <strong>Example queries:</strong>
+                                <ul class="list-disc list-inside mt-1">
+                                    ${persona.example_queries.slice(0, 2).map(q => `<li>${q}</li>`).join('')}
+                                </ul>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="mt-4 bg-blue-50 border-l-4 border-blue-500 p-4">
+                    <p class="text-sm text-blue-900">
+                        💡 <strong>Tip:</strong> Select one or more personas to generate utterances from their perspective. 
+                        Leave unselected to generate general technical queries.
+                    </p>
+                </div>
+            `;
+
+            // Add event listeners
+            content.querySelectorAll('.persona-checkbox').forEach(checkbox => {
+                checkbox.addEventListener('change', (e) => {
+                    const personaId = e.target.dataset.personaId;
+                    const persona = personas.find(p => p.id === personaId);
+                    
+                    if (e.target.checked) {
+                        if (!selectedPersonas.find(p => p.id === personaId)) {
+                            selectedPersonas.push(persona);
+                        }
+                    } else {
+                        selectedPersonas = selectedPersonas.filter(p => p.id !== personaId);
+                    }
+                    
+                    console.log('Selected personas:', selectedPersonas.map(p => p.title));
+                });
+            });
+
+            // Make cards clickable
+            content.querySelectorAll('.persona-card').forEach(card => {
+                card.addEventListener('click', (e) => {
+                    if (e.target.type !== 'checkbox') {
+                        const checkbox = card.querySelector('.persona-checkbox');
+                        checkbox.checked = !checkbox.checked;
+                        checkbox.dispatchEvent(new Event('change'));
+                    }
+                });
+            });
+
+            section.classList.remove('hidden');
+        }
+
         document.getElementById('generateBtn').addEventListener('click', async () => {
             clearStatus();
             const anthropicKey = document.getElementById('anthropicKey').value.trim();
@@ -272,25 +462,60 @@
             generatedDataset = [];
 
             const entities = Object.keys(discoveredEntities).slice(0, 5);
-            addStatus(`🎯 Generating for ${entities.length} entities...`, 'info');
+            
+            // Determine generation strategy
+            let generationInfo = '';
+            if (selectedPersonas.length > 0) {
+                generationInfo = `🎯 Generating ${utteranceCount} utterances per entity for ${selectedPersonas.length} persona(s)...`;
+                addStatus(generationInfo, 'info');
+                addStatus(`👥 Selected personas: ${selectedPersonas.map(p => p.title).join(', ')}`, 'info');
+            } else {
+                generationInfo = `🎯 Generating ${utteranceCount} technical utterances for ${entities.length} entities...`;
+                addStatus(generationInfo, 'info');
+            }
 
             try {
                 for (const entity of entities) {
-                    const response = await fetch(`${API_BASE}/generate-utterances`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            entity,
-                            entity_info: discoveredEntities[entity],
-                            api_key: anthropicKey,
-                            count: utteranceCount
-                        })
-                    });
+                    // If personas selected, generate for each persona
+                    if (selectedPersonas.length > 0) {
+                        for (const persona of selectedPersonas) {
+                            addStatus(`📝 Generating for ${entity} as ${persona.title}...`, 'info');
+                            
+                            const response = await fetch(`${API_BASE}/generate-utterances`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    entity,
+                                    entity_info: discoveredEntities[entity],
+                                    api_key: anthropicKey,
+                                    count: utteranceCount,
+                                    persona: persona
+                                })
+                            });
 
-                    if (!response.ok) throw new Error(`Failed for ${entity}`);
-                    const data = await response.json();
-                    data.utterances.forEach(u => generatedDataset.push({ ...u, entity }));
-                    addStatus(`✅ Generated for ${entity}`, 'success');
+                            if (!response.ok) throw new Error(`Failed for ${entity} (${persona.title})`);
+                            const data = await response.json();
+                            data.utterances.forEach(u => generatedDataset.push({ ...u, entity }));
+                        }
+                    } else {
+                        // Generate general utterances
+                        addStatus(`📝 Generating for ${entity}...`, 'info');
+                        
+                        const response = await fetch(`${API_BASE}/generate-utterances`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                entity,
+                                entity_info: discoveredEntities[entity],
+                                api_key: anthropicKey,
+                                count: utteranceCount
+                            })
+                        });
+
+                        if (!response.ok) throw new Error(`Failed for ${entity}`);
+                        const data = await response.json();
+                        data.utterances.forEach(u => generatedDataset.push({ ...u, entity }));
+                    }
                 }
 
                 displayResults(generatedDataset);
@@ -356,6 +581,9 @@
                     statusBadge = '<span class="bg-red-500 text-white text-xs px-2 py-1 rounded">❌ Failed</span>';
                 }
                 
+                const personaBadge = item.persona ? 
+                    `<span class="bg-orange-100 text-orange-800 text-xs px-2 py-1 rounded">👤 ${item.persona}</span>` : '';
+                
                 return `
                 <div class="${statusClass} rounded-lg p-4 border hover:shadow-md transition" data-index="${index}">
                     <div class="flex justify-between items-start mb-2">
@@ -363,6 +591,7 @@
                             <div class="flex items-center gap-2 mb-2">
                                 <span class="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded">${item.entity}</span>
                                 <span class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded">${item.complexity}</span>
+                                ${personaBadge}
                                 ${statusBadge}
                             </div>
                             <p class="text-gray-800 font-medium">${item.utterance}</p>
@@ -376,8 +605,45 @@
                         ${item.suggested_endpoint}
                     </div>
                     ${item.validation_message ? `
-                        <div class="text-xs ${item.validated ? 'text-green-700' : 'text-red-700'} mt-2">
-                            ${item.validation_message}
+                        <div class="mt-2 p-3 rounded ${item.validated ? 'bg-green-50' : 'bg-red-50'}">
+                            <div class="text-xs ${item.validated ? 'text-green-700' : 'text-red-700'} font-semibold mb-1">
+                                ${item.validated ? '✅ Success' : '❌ Failed'} (HTTP ${item.status_code})
+                            </div>
+                            ${item.result_count !== undefined ? `
+                                <div class="text-sm ${item.validated ? 'text-green-700' : 'text-red-700'} mb-2">
+                                    📊 Returned ${item.result_count} record(s)
+                                </div>
+                            ` : ''}
+                            ${item.preview ? `
+                                <details class="mt-2">
+                                    <summary class="text-xs ${item.validated ? 'text-green-700' : 'text-red-700'} font-semibold cursor-pointer hover:underline">
+                                        👁️ View Sample Data
+                                    </summary>
+                                    <div class="mt-2 p-2 bg-gray-800 text-green-400 rounded text-xs overflow-x-auto">
+                                        <pre>${JSON.stringify(item.preview, null, 2)}</pre>
+                                    </div>
+                                </details>
+                            ` : ''}
+                            ${item.error_details && !item.validated ? `
+                                <details class="mt-2">
+                                    <summary class="text-xs text-red-700 font-semibold cursor-pointer hover:underline">
+                                        ⚠️ View Error Details
+                                    </summary>
+                                    <div class="mt-2 p-2 bg-red-100 text-red-800 rounded text-xs overflow-x-auto">
+                                        <pre>${item.error_details}</pre>
+                                    </div>
+                                </details>
+                            ` : ''}
+                            ${item.sample_data && item.validated ? `
+                                <details class="mt-2">
+                                    <summary class="text-xs text-green-700 font-semibold cursor-pointer hover:underline">
+                                        📄 View Full Response
+                                    </summary>
+                                    <div class="mt-2 p-2 bg-gray-800 text-green-400 rounded text-xs overflow-x-auto max-h-96">
+                                        <pre>${JSON.stringify(item.sample_data, null, 2)}</pre>
+                                    </div>
+                                </details>
+                            ` : ''}
                         </div>
                     ` : ''}
                 </div>
@@ -398,7 +664,7 @@
             const item = generatedDataset[index];
             const serviceUrl = document.getElementById('serviceUrl').value.trim() || 
                               document.getElementById('metadataUrl').value.trim().replace('/$metadata', '');
-            const apiKeyHeader = document.getElementById('apiKeyHeader').value.trim();
+            const authConfig = getAuthConfig();
 
             if (!serviceUrl) {
                 addStatus('⚠️ Please provide a service URL to test endpoints', 'error');
@@ -416,7 +682,7 @@
                     body: JSON.stringify({
                         service_url: serviceUrl,
                         endpoint: item.suggested_endpoint,
-                        api_key_header: apiKeyHeader
+                        auth_config: authConfig
                     })
                 });
 
@@ -425,9 +691,14 @@
                 item.validated = result.success;
                 item.validation_message = result.message;
                 item.status_code = result.status_code;
+                item.result_count = result.result_count;
+                item.preview = result.preview;
+                item.sample_data = result.sample_data;
+                item.error_details = result.error_details;
                 
                 if (result.success) {
-                    addStatus(`✅ Valid: ${item.utterance.substring(0, 50)}...`, 'success');
+                    const countMsg = result.result_count !== undefined ? ` (${result.result_count} records)` : '';
+                    addStatus(`✅ Valid: ${item.utterance.substring(0, 50)}...${countMsg}`, 'success');
                 } else {
                     addStatus(`❌ Failed (${result.status_code}): ${item.utterance.substring(0, 50)}...`, 'error');
                 }
