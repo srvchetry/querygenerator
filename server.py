@@ -353,6 +353,105 @@ Return ONLY valid JSON:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/sample-data', methods=['POST'])
+def fetch_sample_data():
+    """Fetch sample data from entities to get real values"""
+    print("\n" + "="*60)
+    print("📊 FETCH SAMPLE DATA")
+    print("="*60)
+    
+    try:
+        data = request.json
+        service_url = data.get('service_url', '').strip()
+        entities = data.get('entities', {})
+        auth_config = data.get('auth_config', {})
+        sample_size = data.get('sample_size', 5)
+        
+        if not service_url or not entities:
+            return jsonify({'error': 'Service URL and entities required'}), 400
+        
+        print(f"🔍 Fetching sample data from {len(entities)} entities...")
+        print(f"📦 Sample size: {sample_size} records per entity")
+        
+        headers = build_auth_headers(auth_config)
+        
+        entity_samples = {}
+        
+        for entity_name in list(entities.keys())[:10]:  # Limit to first 10 entities
+            try:
+                # Fetch sample data
+                url = f"{service_url.rstrip('/')}/{entity_name}?$top={sample_size}"
+                print(f"  📥 Fetching: {entity_name}")
+                
+                response = requests.get(url, headers=headers, timeout=15)
+                
+                if response.status_code == 200:
+                    json_data = response.json()
+                    
+                    # Extract records
+                    records = []
+                    if isinstance(json_data, dict):
+                        if 'd' in json_data and 'results' in json_data['d']:
+                            records = json_data['d']['results']
+                        elif 'value' in json_data:
+                            records = json_data['value']
+                        elif 'd' in json_data and isinstance(json_data['d'], list):
+                            records = json_data['d']
+                    
+                    if records:
+                        # Extract unique values for each property
+                        property_values = {}
+                        
+                        for record in records:
+                            for key, value in record.items():
+                                # Skip metadata and complex objects
+                                if key.startswith('__') or isinstance(value, dict) or isinstance(value, list):
+                                    continue
+                                
+                                if key not in property_values:
+                                    property_values[key] = set()
+                                
+                                # Add value if it's simple type and not null
+                                if value is not None and not isinstance(value, (dict, list)):
+                                    property_values[key].add(str(value))
+                        
+                        # Convert sets to lists and limit
+                        sample_values = {}
+                        for key, values in property_values.items():
+                            sample_values[key] = list(values)[:5]  # Keep max 5 unique values per property
+                        
+                        entity_samples[entity_name] = {
+                            'record_count': len(records),
+                            'sample_values': sample_values,
+                            'sample_record': records[0] if records else None
+                        }
+                        
+                        print(f"    ✅ Got {len(records)} records, {len(sample_values)} properties")
+                    else:
+                        print(f"    ⚠️ No records returned")
+                        entity_samples[entity_name] = {'record_count': 0, 'sample_values': {}}
+                else:
+                    print(f"    ⚠️ HTTP {response.status_code}")
+                    entity_samples[entity_name] = {'error': f'HTTP {response.status_code}'}
+                    
+            except Exception as e:
+                print(f"    ❌ Error: {str(e)}")
+                entity_samples[entity_name] = {'error': str(e)}
+        
+        print(f"✅ Fetched sample data from {len(entity_samples)} entities")
+        print("="*60 + "\n")
+        
+        return jsonify({
+            'success': True,
+            'samples': entity_samples
+        })
+        
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/generate-utterances', methods=['POST'])
 def generate_utterances():
     """Generate utterances for an entity with optional persona"""
@@ -367,11 +466,14 @@ def generate_utterances():
         api_key = data.get('api_key')
         count = data.get('count', 10)
         persona = data.get('persona', None)
+        sample_data = data.get('sample_data', None)  # NEW: Real values from API
         
         print(f"📝 Entity: {entity}")
         print(f"📊 Count: {count}")
         if persona:
             print(f"👤 Persona: {persona.get('title', 'Unknown')}")
+        if sample_data:
+            print(f"✨ Using real sample data from API")
         
         if not entity or not api_key:
             return jsonify({'error': 'Entity and API key are required'}), 400
@@ -400,6 +502,44 @@ Make the utterances sound natural and conversational, reflecting how {persona.ge
         else:
             persona_context = "Generate natural language queries that various users might ask."
         
+        # Build property info with data types
+        property_details = []
+        for prop in properties[:15]:
+            if isinstance(prop, dict):
+                prop_name = prop.get('name', '')
+                prop_type = prop.get('type', 'String')
+                property_details.append(f"{prop_name} ({prop_type})")
+            else:
+                property_details.append(str(prop))
+        
+        property_info = ', '.join(property_details)
+        
+        # Group properties by type for better filter suggestions
+        string_props = [p.get('name') if isinstance(p, dict) else p for p in properties if isinstance(p, dict) and 'String' in p.get('type', '')]
+        numeric_props = [p.get('name') if isinstance(p, dict) else p for p in properties if isinstance(p, dict) and any(t in p.get('type', '') for t in ['Int', 'Decimal', 'Double', 'Float'])]
+        date_props = [p.get('name') if isinstance(p, dict) else p for p in properties if isinstance(p, dict) and 'Date' in p.get('type', '')]
+        bool_props = [p.get('name') if isinstance(p, dict) else p for p in properties if isinstance(p, dict) and 'Boolean' in p.get('type', '')]
+        
+        # Build sample values context
+        sample_values_context = ""
+        if sample_data and 'sample_values' in sample_data:
+            sample_values_context = "\n\nREAL VALUES FROM API (use these in your queries):\n"
+            for prop, values in list(sample_data['sample_values'].items())[:20]:  # Limit to 20 properties
+                if values:
+                    sample_values_context += f"- {prop}: {', '.join([repr(v) for v in values[:5]])}\n"
+            
+            sample_values_context += f"""
+IMPORTANT: Use these ACTUAL values in your filter conditions!
+- These are real values from the database
+- Guaranteed to return results when tested
+- Use exact values (case-sensitive for strings)
+
+Example good queries using real data:
+- If Country values are ['DE', 'US', 'GB'], use: $filter=Country eq 'DE'
+- If Status values are ['ACTIVE', 'INACTIVE'], use: $filter=Status eq 'ACTIVE'
+- Don't invent values that aren't in the list above
+"""
+        
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
@@ -413,6 +553,8 @@ Entity: {entity}
 Key Fields: {entity_info.get('keys', [])}
 Sample Properties: {prop_names[:15]}
 Navigation Properties: {entity_info.get('navigation_properties', [])}
+
+{sample_values_context}
 
 Create diverse queries with varying complexity:
 

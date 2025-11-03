@@ -141,10 +141,17 @@
             <div id="entitiesContent"></div>
             
             <div class="mt-6 pt-6 border-t">
-                <button id="suggestPersonasBtn"
-                    class="bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2">
-                    <span>👥 Suggest User Personas</span>
-                </button>
+                <div class="flex gap-3">
+                    <button id="suggestPersonasBtn"
+                        class="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2">
+                        <span>👥 Suggest User Personas</span>
+                    </button>
+                    <button id="fetchSampleDataBtn"
+                        class="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2">
+                        <span>📊 Fetch Sample Data</span>
+                    </button>
+                </div>
+                <p class="text-xs text-gray-500 mt-2">💡 Fetch sample data to generate more realistic utterances with actual values from your API</p>
             </div>
         </div>
 
@@ -187,6 +194,7 @@
         let suggestedPersonas = [];
         let selectedPersonas = [];
         let generatedDataset = [];
+        let sampleDataCache = {};  // Cache for sample data
 
         // Show/hide auth fields based on type
         document.getElementById('authType').addEventListener('change', (e) => {
@@ -344,6 +352,57 @@
             section.classList.remove('hidden');
         }
 
+        document.getElementById('fetchSampleDataBtn').addEventListener('click', async () => {
+            const serviceUrl = document.getElementById('serviceUrl').value.trim() || 
+                              document.getElementById('metadataUrl').value.trim().replace('/$metadata', '');
+            const authConfig = getAuthConfig();
+            
+            if (!serviceUrl) {
+                addStatus('⚠️ Please provide a service URL to fetch sample data', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('fetchSampleDataBtn');
+            setLoading(btn, true, 'Fetching sample data...');
+            addStatus('📊 Fetching sample data from API (this may take a moment)...', 'info');
+
+            try {
+                const response = await fetch(`${API_BASE}/sample-data`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        service_url: serviceUrl,
+                        entities: discoveredEntities,
+                        auth_config: authConfig,
+                        sample_size: 5
+                    })
+                });
+
+                if (!response.ok) throw new Error('Failed to fetch sample data');
+
+                const data = await response.json();
+                sampleDataCache = data.samples;
+                
+                const successCount = Object.keys(sampleDataCache).filter(k => !sampleDataCache[k].error).length;
+                addStatus(`✅ Fetched sample data from ${successCount} entities!`, 'success');
+                
+                // Show summary
+                let summaryMsg = '📊 Sample Data Summary:\n';
+                for (const [entity, sample] of Object.entries(sampleDataCache)) {
+                    if (sample.record_count) {
+                        summaryMsg += `\n• ${entity}: ${sample.record_count} records`;
+                    }
+                }
+                console.log(summaryMsg);
+
+            } catch (error) {
+                addStatus(`❌ ${error.message}`, 'error');
+                sampleDataCache = {};
+            } finally {
+                setLoading(btn, false, '📊 Fetch Sample Data');
+            }
+        });
+
         document.getElementById('suggestPersonasBtn').addEventListener('click', async () => {
             const anthropicKey = document.getElementById('anthropicKey').value.trim();
             
@@ -489,7 +548,8 @@
                                     entity_info: discoveredEntities[entity],
                                     api_key: anthropicKey,
                                     count: utteranceCount,
-                                    persona: persona
+                                    persona: persona,
+                                    sample_data: sampleDataCache[entity] || null
                                 })
                             });
 
@@ -508,7 +568,8 @@
                                 entity,
                                 entity_info: discoveredEntities[entity],
                                 api_key: anthropicKey,
-                                count: utteranceCount
+                                count: utteranceCount,
+                                sample_data: sampleDataCache[entity] || null
                             })
                         });
 
