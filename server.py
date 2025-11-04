@@ -69,9 +69,15 @@ def parse_odata_metadata(xml_content):
                     prop_name = prop.get('Name')
                     prop_type = prop.get('Type', '')
                     if prop_name:
+                        # Check SAP annotations for filterability, sortability
+                        filterable = prop.get('{http://www.sap.com/Protocols/SAPData}filterable', 'true')
+                        sortable = prop.get('{http://www.sap.com/Protocols/SAPData}sortable', 'true')
+                        
                         properties.append({
                             'name': prop_name,
-                            'type': prop_type.split('.')[-1]  # Get just the type name
+                            'type': prop_type.split('.')[-1],  # Get just the type name
+                            'filterable': filterable.lower() == 'true',
+                            'sortable': sortable.lower() == 'true'
                         })
                 
                 # Get navigation properties
@@ -127,7 +133,9 @@ def build_auth_headers(auth_config):
     """Build authentication headers based on config"""
     headers = {
         'User-Agent': 'Mozilla/5.0',
-        'Accept': 'application/xml, text/xml, application/json'
+        'Accept': 'application/json',
+        'DataServiceVersion': '2.0',  # SAP OData requirement
+        'MaxDataServiceVersion': '3.0'
     }
     
     if not auth_config or auth_config.get('type') == 'none':
@@ -182,7 +190,13 @@ def fetch_metadata():
         print(f"🔐 Auth type: {auth_config.get('type', 'none')}")
         
         # Prepare headers with authentication
+        # For $metadata, we need to accept XML, not JSON
         headers = build_auth_headers(auth_config)
+        headers['Accept'] = 'application/xml, text/xml, application/atom+xml'  # Override for metadata
+        headers.pop('DataServiceVersion', None)  # Not needed for metadata
+        headers.pop('MaxDataServiceVersion', None)  # Not needed for metadata
+        
+        print(f"📋 Request headers: Accept: {headers.get('Accept')}")
         
         # Fetch the metadata
         response = requests.get(url, headers=headers, timeout=30)
@@ -300,12 +314,18 @@ def suggest_personas():
         
         client = anthropic.Anthropic(api_key=api_key)
         
-        message = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2048,
-            messages=[{
-                "role": "user",
-                "content": f"""Based on these OData entities, suggest 5-7 relevant user personas who would interact with this API.
+        # Retry logic for API overload
+        max_retries = 3
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                message = client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=2048,
+                    messages=[{
+                        "role": "user",
+                        "content": f"""Based on these OData entities, suggest 5-7 relevant user personas who would interact with this API.
 
 Entities: {', '.join(entity_list)}
 
@@ -328,8 +348,24 @@ Return ONLY valid JSON:
     }}
   ]
 }}"""
-            }]
-        )
+                    }]
+                )
+                
+                # Success - break retry loop
+                break
+                
+            except anthropic.APIError as e:
+                if any(keyword in str(e).lower() for keyword in ['overload', 'rate', '529', '503', '502']):
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (2 ** attempt)
+                        print(f"⚠️ API overloaded (attempt {attempt + 1}/{max_retries}), waiting {wait_time}s...")
+                        import time
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise Exception(f"API overloaded after {max_retries} attempts. Please wait and try again.") from e
+                else:
+                    raise
         
         response_text = message.content[0].text
         
@@ -379,13 +415,21 @@ def fetch_sample_data():
         
         for entity_name in list(entities.keys())[:10]:  # Limit to first 10 entities
             try:
-                # Fetch sample data
-                url = f"{service_url.rstrip('/')}/{entity_name}?$top={sample_size}"
+                # Construct URL with proper OData parameters
+                # Add $inlinecount for SAP compatibility
+                url = f"{service_url.rstrip('/')}/{entity_name}?$top={sample_size}&$inlinecount=allpages&$format=json"
+                
                 print(f"  📥 Fetching: {entity_name}")
+                print(f"     URL: {url}")
                 
                 response = requests.get(url, headers=headers, timeout=15)
                 
+                print(f"     Status: {response.status_code}")
+                
                 if response.status_code == 200:
+                    content_type = response.headers.get('content-type', '')
+                    print(f"     Content-Type: {content_type}")
+                    
                     json_data = response.json()
                     
                     # Extract records
@@ -397,6 +441,9 @@ def fetch_sample_data():
                             records = json_data['value']
                         elif 'd' in json_data and isinstance(json_data['d'], list):
                             records = json_data['d']
+                        elif 'd' in json_data and not isinstance(json_data['d'], list):
+                            # Single record wrapped in 'd'
+                            records = [json_data['d']]
                     
                     if records:
                         # Extract unique values for each property
@@ -413,7 +460,17 @@ def fetch_sample_data():
                                 
                                 # Add value if it's simple type and not null
                                 if value is not None and not isinstance(value, (dict, list)):
-                                    property_values[key].add(str(value))
+                                    # Store the actual value type for better filter generation
+                                    str_value = str(value)
+                                    
+                                    # For booleans, normalize to lowercase
+                                    if isinstance(value, bool):
+                                        str_value = 'true' if value else 'false'
+                                    # For strings that look like booleans, keep as-is but add note
+                                    elif str_value.lower() in ['true', 'false']:
+                                        str_value = f"{str_value} (boolean)"
+                                    
+                                    property_values[key].add(str_value)
                         
                         # Convert sets to lists and limit
                         sample_values = {}
@@ -428,15 +485,35 @@ def fetch_sample_data():
                         
                         print(f"    ✅ Got {len(records)} records, {len(sample_values)} properties")
                     else:
-                        print(f"    ⚠️ No records returned")
+                        print(f"    ⚠️ No records returned (empty result set)")
                         entity_samples[entity_name] = {'record_count': 0, 'sample_values': {}}
+                        
+                elif response.status_code == 401:
+                    print(f"    ❌ HTTP 401 - Authentication required or invalid API key")
+                    entity_samples[entity_name] = {'error': 'Authentication failed - check API key'}
+                elif response.status_code == 403:
+                    print(f"    ❌ HTTP 403 - Forbidden (insufficient permissions)")
+                    entity_samples[entity_name] = {'error': 'Access forbidden'}
+                elif response.status_code == 404:
+                    print(f"    ❌ HTTP 404 - Entity not found")
+                    entity_samples[entity_name] = {'error': 'Entity not found'}
                 else:
-                    print(f"    ⚠️ HTTP {response.status_code}")
+                    error_body = response.text[:200] if response.text else 'No error message'
+                    print(f"    ❌ HTTP {response.status_code}: {error_body}")
                     entity_samples[entity_name] = {'error': f'HTTP {response.status_code}'}
                     
+            except requests.exceptions.Timeout:
+                print(f"    ⏱️ Timeout after 15 seconds")
+                entity_samples[entity_name] = {'error': 'Request timeout'}
+            except requests.exceptions.ConnectionError as e:
+                print(f"    ❌ Connection error: {str(e)[:100]}")
+                entity_samples[entity_name] = {'error': 'Connection failed'}
+            except json.JSONDecodeError as e:
+                print(f"    ❌ Invalid JSON response: {str(e)}")
+                entity_samples[entity_name] = {'error': 'Invalid JSON response'}
             except Exception as e:
-                print(f"    ❌ Error: {str(e)}")
-                entity_samples[entity_name] = {'error': str(e)}
+                print(f"    ❌ Error: {str(e)[:100]}")
+                entity_samples[entity_name] = {'error': str(e)[:200]}
         
         print(f"✅ Fetched sample data from {len(entity_samples)} entities")
         print("="*60 + "\n")
@@ -504,15 +581,36 @@ Make the utterances sound natural and conversational, reflecting how {persona.ge
         
         # Build property info with data types
         property_details = []
-        for prop in properties[:15]:
+        filterable_props = []
+        non_filterable_props = []
+        sortable_props = []
+        
+        for prop in properties[:20]:
             if isinstance(prop, dict):
                 prop_name = prop.get('name', '')
                 prop_type = prop.get('type', 'String')
-                property_details.append(f"{prop_name} ({prop_type})")
+                is_filterable = prop.get('filterable', True)
+                is_sortable = prop.get('sortable', True)
+                
+                # Track filterable vs non-filterable
+                if is_filterable:
+                    filterable_props.append(f"{prop_name} ({prop_type})")
+                else:
+                    non_filterable_props.append(prop_name)
+                
+                if is_sortable:
+                    sortable_props.append(prop_name)
+                
+                # Add to full list
+                filter_note = "" if is_filterable else " [NOT FILTERABLE]"
+                property_details.append(f"{prop_name} ({prop_type}){filter_note}")
             else:
                 property_details.append(str(prop))
         
         property_info = ', '.join(property_details)
+        
+        print(f"  🔒 Filterable properties: {filterable_props[:5]}")
+        print(f"  🚫 Non-filterable properties: {non_filterable_props[:5]}")
         
         # Group properties by type for better filter suggestions
         string_props = [p.get('name') if isinstance(p, dict) else p for p in properties if isinstance(p, dict) and 'String' in p.get('type', '')]
@@ -632,6 +730,63 @@ Return ONLY valid JSON array:
         
         utterances = json.loads(utterances_text)
         
+        # POST-PROCESS: Ensure every endpoint has $top to prevent buffer overflow
+        # AND remove non-filterable properties from $filter clauses
+        
+        # Get list of non-filterable properties for validation
+        non_filterable = []
+        for prop in properties:
+            if isinstance(prop, dict) and not prop.get('filterable', True):
+                non_filterable.append(prop.get('name', ''))
+        
+        for utterance in utterances:
+            endpoint = utterance.get('suggested_endpoint', '')
+            original_endpoint = endpoint
+            modified = False
+            
+            # Check if $top is missing
+            if endpoint and '$top' not in endpoint.lower():
+                # Add $top parameter
+                if '?' in endpoint:
+                    endpoint = f"{endpoint}&$top=50"
+                else:
+                    endpoint = f"{endpoint}?$top=50"
+                modified = True
+                print(f"  ⚙️ Auto-added $top=50")
+            
+            # Check for non-filterable properties in $filter
+            if '$filter' in endpoint.lower() and non_filterable:
+                import re
+                # Extract the $filter clause
+                filter_match = re.search(r'\$filter=([^&]+)', endpoint, re.IGNORECASE)
+                if filter_match:
+                    filter_clause = filter_match.group(1)
+                    
+                    # Check if any non-filterable properties are used
+                    used_non_filterable = []
+                    for prop in non_filterable:
+                        # Case-insensitive check for property name in filter
+                        if re.search(r'\b' + re.escape(prop) + r'\b', filter_clause, re.IGNORECASE):
+                            used_non_filterable.append(prop)
+                    
+                    if used_non_filterable:
+                        # Remove the entire $filter clause to prevent errors
+                        print(f"  ⚠️ Removing $filter with non-filterable properties: {', '.join(used_non_filterable)}")
+                        # Remove $filter and its value
+                        endpoint = re.sub(r'[&?]\$filter=[^&]*', '', endpoint, flags=re.IGNORECASE)
+                        # Clean up double & or ? at start
+                        endpoint = re.sub(r'\?&', '?', endpoint)
+                        endpoint = re.sub(r'&&', '&', endpoint)
+                        modified = True
+                        utterance['removed_non_filterable'] = used_non_filterable
+                        utterance['warning'] = f"Original filter removed due to non-filterable properties: {', '.join(used_non_filterable)}"
+            
+            if modified:
+                utterance['suggested_endpoint'] = endpoint
+                if original_endpoint != endpoint:
+                    utterance['original_endpoint'] = original_endpoint
+                    utterance['auto_modified'] = True
+        
         # Add persona info to each utterance
         if persona:
             for u in utterances:
@@ -673,16 +828,27 @@ def validate_endpoint():
         
         # Construct full URL
         full_url = service_url.rstrip('/') + endpoint
+        
+        # Add $format=json if not already present
+        if '?' in endpoint:
+            full_url += '&$format=json'
+        else:
+            full_url += '?$format=json'
+        
         print(f"🔍 Testing: {full_url}")
         print(f"🔐 Auth type: {auth_config.get('type', 'none')}")
         
         # Prepare headers with authentication
         headers = build_auth_headers(auth_config)
         
+        print(f"📋 Headers: {', '.join([f'{k}: {v[:20]}...' if len(str(v)) > 20 else f'{k}: {v}' for k, v in headers.items()])}")
+        
         # Make request
         response = requests.get(full_url, headers=headers, timeout=15)
         
-        print(f"📊 Status: {response.status_code}")
+        print(f"📊 Response Status: {response.status_code}")
+        print(f"📊 Response Content-Type: {response.headers.get('content-type', 'unknown')}")
+        print(f"📊 Response Size: {len(response.text)} chars")
         
         success = response.status_code == 200
         
@@ -701,26 +867,42 @@ def validate_endpoint():
                 # Extract useful info for display
                 if isinstance(json_data, dict):
                     # Count results if it's an OData response
-                    if 'd' in json_data and 'results' in json_data['d']:
-                        result['result_count'] = len(json_data['d']['results'])
+                    if 'd' in json_data:
+                        if 'results' in json_data['d'] and isinstance(json_data['d']['results'], list):
+                            result['result_count'] = len(json_data['d']['results'])
+                            if json_data['d']['results']:
+                                result['preview'] = json_data['d']['results'][0]
+                        elif isinstance(json_data['d'], list):
+                            result['result_count'] = len(json_data['d'])
+                            if json_data['d']:
+                                result['preview'] = json_data['d'][0]
+                        elif not isinstance(json_data['d'], list):
+                            # Single record
+                            result['result_count'] = 1
+                            result['preview'] = json_data['d']
+                        
+                        # Check for inline count
+                        if '__count' in json_data['d']:
+                            result['total_count'] = json_data['d']['__count']
                     elif 'value' in json_data:
                         result['result_count'] = len(json_data['value'])
+                        if json_data['value']:
+                            result['preview'] = json_data['value'][0]
+                        # OData v4 count
+                        if '@odata.count' in json_data:
+                            result['total_count'] = json_data['@odata.count']
                     
-                    # Get first record as preview
-                    if 'd' in json_data and 'results' in json_data['d'] and json_data['d']['results']:
-                        result['preview'] = json_data['d']['results'][0]
-                    elif 'value' in json_data and json_data['value']:
-                        result['preview'] = json_data['value'][0]
-                    elif 'd' in json_data and not isinstance(json_data['d'], list):
-                        result['preview'] = json_data['d']
-                    
-            except:
+            except json.JSONDecodeError:
                 result['sample_data'] = response.text[:1000]
         else:
             result['message'] = response.text[:500]
             result['error_details'] = response.text[:2000]
         
-        print(f"{'✅' if success else '❌'} Result: {result['message'][:100]}")
+        print(f"{'✅' if success else '❌'} Result: {result.get('message', 'Unknown')[:100]}")
+        if success and 'result_count' in result:
+            print(f"📊 Returned {result['result_count']} record(s)")
+            if 'total_count' in result:
+                print(f"📊 Total available: {result['total_count']} record(s)")
         print("="*60 + "\n")
         
         return jsonify(result)

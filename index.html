@@ -126,32 +126,57 @@
                         class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2">
                         <span>🔍 Discover Entities</span>
                     </button>
-                    <button id="generateBtn" 
-                        class="flex-1 bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
-                        <span>✨ Generate Utterances</span>
-                    </button>
                 </div>
             </div>
         </div>
 
         <div id="statusArea" class="space-y-2 mb-6"></div>
 
+        <!-- Workflow Notice -->
+        <div id="workflowNotice" class="hidden bg-blue-50 border-l-4 border-blue-500 p-4 mb-6 fade-in">
+            <p class="text-sm text-blue-900">
+                <strong>📋 Next Steps:</strong><br>
+                1️⃣ Select entities below<br>
+                2️⃣ Click "Get Sample Data"<br>
+                3️⃣ (Optional) Click "Suggest Personas"<br>
+                4️⃣ Click "Generate Utterances"
+            </p>
+        </div>
+
         <div id="entitiesSection" class="hidden bg-white rounded-lg shadow-lg p-6 mb-6 fade-in">
             <h2 class="text-2xl font-semibold text-gray-800 mb-4">📊 Discovered Entities</h2>
             <div id="entitiesContent"></div>
             
             <div class="mt-6 pt-6 border-t">
+                <div class="mb-4">
+                    <label class="flex items-center gap-2 text-sm font-medium text-gray-700 mb-3">
+                        <input type="checkbox" id="selectAllEntities" class="w-4 h-4 text-indigo-600 rounded">
+                        Select All Entities
+                    </label>
+                    <div id="entityCheckboxes" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 max-h-64 overflow-y-auto p-4 bg-gray-50 rounded-lg"></div>
+                </div>
+                
                 <div class="flex gap-3">
-                    <button id="suggestPersonasBtn"
-                        class="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2">
-                        <span>👥 Suggest User Personas</span>
-                    </button>
                     <button id="fetchSampleDataBtn"
-                        class="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2">
-                        <span>📊 Fetch Sample Data</span>
+                        class="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled>
+                        <span>📊 Get Sample Data</span>
                     </button>
                 </div>
-                <p class="text-xs text-gray-500 mt-2">💡 Fetch sample data to generate more realistic utterances with actual values from your API</p>
+                <p class="text-xs text-gray-500 mt-2">💡 Select entities above, then fetch sample data to generate realistic utterances</p>
+            </div>
+        </div>
+
+        <div id="sampleDataSection" class="hidden bg-white rounded-lg shadow-lg p-6 mb-6 fade-in">
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">✅ Sample Data Fetched</h2>
+            <div id="sampleDataSummary"></div>
+            
+            <div class="mt-6 pt-6 border-t">
+                <button id="suggestPersonasBtn"
+                    class="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2">
+                    <span>👥 Suggest User Personas</span>
+                </button>
+                <p class="text-xs text-gray-500 mt-2">💡 Get AI-suggested personas for more natural utterances (optional)</p>
             </div>
         </div>
 
@@ -159,6 +184,13 @@
             <h2 class="text-2xl font-semibold text-gray-800 mb-4">👥 User Personas</h2>
             <p class="text-gray-600 mb-4">Select personas to generate more natural, role-specific utterances:</p>
             <div id="personasContent" class="space-y-3"></div>
+            
+            <div class="mt-6 pt-6 border-t">
+                <button id="generateFromPersonasBtn"
+                    class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2">
+                    <span>✨ Generate Utterances</span>
+                </button>
+            </div>
         </div>
 
         <div id="resultsSection" class="hidden bg-white rounded-lg shadow-lg p-6 fade-in">
@@ -191,6 +223,7 @@
     <script>
         const API_BASE = 'http://localhost:5000/api';
         let discoveredEntities = {};
+        let selectedEntityNames = [];
         let suggestedPersonas = [];
         let selectedPersonas = [];
         let generatedDataset = [];
@@ -325,7 +358,6 @@
 
                 displayEntities(discoveredEntities);
                 addStatus(`✅ Found ${Object.keys(discoveredEntities).length} entities!`, 'success');
-                document.getElementById('generateBtn').disabled = false;
 
             } catch (error) {
                 addStatus(`❌ ${error.message}`, 'error');
@@ -337,19 +369,60 @@
         function displayEntities(entities) {
             const section = document.getElementById('entitiesSection');
             const content = document.getElementById('entitiesContent');
+            const checkboxContainer = document.getElementById('entityCheckboxes');
             const count = Object.keys(entities).length;
 
             content.innerHTML = `
                 <div class="bg-indigo-50 rounded-lg p-4 mb-4">
-                    <h3 class="font-semibold text-indigo-900 mb-2">Total Entities: ${count}</h3>
-                </div>
-                <div class="flex flex-wrap gap-2">
-                    ${Object.keys(entities).map(e => 
-                        `<span class="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm">${e}</span>`
-                    ).join('')}
+                    <h3 class="font-semibold text-indigo-900 mb-2">Total Entities Discovered: ${count}</h3>
+                    <p class="text-sm text-indigo-700">Select entities below to fetch sample data and generate utterances</p>
                 </div>
             `;
+
+            // Create checkboxes for entity selection
+            checkboxContainer.innerHTML = Object.keys(entities).map(entityName => `
+                <label class="flex items-center gap-2 p-2 hover:bg-gray-100 rounded cursor-pointer">
+                    <input type="checkbox" class="entity-checkbox w-4 h-4 text-indigo-600 rounded" 
+                           value="${entityName}" checked>
+                    <span class="text-sm text-gray-700">${entityName}</span>
+                </label>
+            `).join('');
+
+            // Initialize selected entities (all checked by default)
+            selectedEntityNames = Object.keys(entities);
+
+            // Add event listeners
+            document.querySelectorAll('.entity-checkbox').forEach(checkbox => {
+                checkbox.addEventListener('change', updateSelectedEntities);
+            });
+
+            document.getElementById('selectAllEntities').addEventListener('change', (e) => {
+                document.querySelectorAll('.entity-checkbox').forEach(cb => {
+                    cb.checked = e.target.checked;
+                });
+                updateSelectedEntities();
+            });
+
             section.classList.remove('hidden');
+            document.getElementById('workflowNotice').classList.remove('hidden');
+            document.getElementById('fetchSampleDataBtn').disabled = false;
+        }
+
+        function updateSelectedEntities() {
+            selectedEntityNames = Array.from(document.querySelectorAll('.entity-checkbox:checked'))
+                .map(cb => cb.value);
+            
+            const fetchBtn = document.getElementById('fetchSampleDataBtn');
+            fetchBtn.disabled = selectedEntityNames.length === 0;
+            
+            // Update select all checkbox state
+            const allCheckboxes = document.querySelectorAll('.entity-checkbox');
+            const checkedCount = selectedEntityNames.length;
+            const selectAll = document.getElementById('selectAllEntities');
+            selectAll.checked = checkedCount === allCheckboxes.length;
+            selectAll.indeterminate = checkedCount > 0 && checkedCount < allCheckboxes.length;
+            
+            console.log(`Selected ${selectedEntityNames.length} entities:`, selectedEntityNames);
         }
 
         document.getElementById('fetchSampleDataBtn').addEventListener('click', async () => {
@@ -362,17 +435,30 @@
                 return;
             }
 
+            if (selectedEntityNames.length === 0) {
+                addStatus('⚠️ Please select at least one entity', 'error');
+                return;
+            }
+
             const btn = document.getElementById('fetchSampleDataBtn');
             setLoading(btn, true, 'Fetching sample data...');
-            addStatus('📊 Fetching sample data from API (this may take a moment)...', 'info');
+            addStatus(`📊 Fetching sample data from ${selectedEntityNames.length} selected entities...`, 'info');
 
             try {
+                // Filter entities to only selected ones
+                const selectedEntities = {};
+                selectedEntityNames.forEach(name => {
+                    if (discoveredEntities[name]) {
+                        selectedEntities[name] = discoveredEntities[name];
+                    }
+                });
+
                 const response = await fetch(`${API_BASE}/sample-data`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         service_url: serviceUrl,
-                        entities: discoveredEntities,
+                        entities: selectedEntities,
                         auth_config: authConfig,
                         sample_size: 5
                     })
@@ -386,37 +472,61 @@
                 const successCount = Object.keys(sampleDataCache).filter(k => !sampleDataCache[k].error).length;
                 addStatus(`✅ Fetched sample data from ${successCount} entities!`, 'success');
                 
-                // Show detailed summary
-                let detailsHtml = '<div class="mt-4 p-4 bg-teal-50 border border-teal-200 rounded-lg"><h4 class="font-semibold text-teal-900 mb-2">📊 Sample Data Summary:</h4><ul class="text-sm text-teal-800 space-y-1">';
-                
-                for (const [entity, sample] of Object.entries(sampleDataCache)) {
-                    if (sample.record_count > 0) {
-                        const propCount = Object.keys(sample.sample_values || {}).length;
-                        detailsHtml += `<li>✅ <strong>${entity}</strong>: ${sample.record_count} records, ${propCount} properties with values</li>`;
-                    } else if (sample.error) {
-                        detailsHtml += `<li>❌ <strong>${entity}</strong>: ${sample.error}</li>`;
-                    } else {
-                        detailsHtml += `<li>⚠️ <strong>${entity}</strong>: No records found (empty table)</li>`;
-                    }
-                }
-                
-                detailsHtml += '</ul></div>';
-                
-                const statusArea = document.getElementById('statusArea');
-                const div = document.createElement('div');
-                div.className = 'fade-in';
-                div.innerHTML = detailsHtml;
-                statusArea.appendChild(div);
-                
-                console.log('Sample data cache:', sampleDataCache);
+                displaySampleDataSummary(sampleDataCache);
 
             } catch (error) {
                 addStatus(`❌ ${error.message}`, 'error');
                 sampleDataCache = {};
             } finally {
-                setLoading(btn, false, '📊 Fetch Sample Data');
+                setLoading(btn, false, '📊 Get Sample Data');
             }
         });
+
+        function displaySampleDataSummary(samples) {
+            const section = document.getElementById('sampleDataSection');
+            const summary = document.getElementById('sampleDataSummary');
+
+            let successCount = 0;
+            let failCount = 0;
+            let emptyCount = 0;
+
+            const details = Object.entries(samples).map(([entity, sample]) => {
+                if (sample.error) {
+                    failCount++;
+                    return `<li>❌ <strong>${entity}</strong>: ${sample.error}</li>`;
+                } else if (sample.record_count > 0) {
+                    successCount++;
+                    const propCount = Object.keys(sample.sample_values || {}).length;
+                    return `<li>✅ <strong>${entity}</strong>: ${sample.record_count} records, ${propCount} properties</li>`;
+                } else {
+                    emptyCount++;
+                    return `<li>⚠️ <strong>${entity}</strong>: No records (empty)</li>`;
+                }
+            }).join('');
+
+            summary.innerHTML = `
+                <div class="grid grid-cols-3 gap-4 mb-4">
+                    <div class="bg-green-50 rounded-lg p-4 text-center">
+                        <div class="text-3xl font-bold text-green-600">${successCount}</div>
+                        <div class="text-sm text-green-700">Success</div>
+                    </div>
+                    <div class="bg-yellow-50 rounded-lg p-4 text-center">
+                        <div class="text-3xl font-bold text-yellow-600">${emptyCount}</div>
+                        <div class="text-sm text-yellow-700">Empty</div>
+                    </div>
+                    <div class="bg-red-50 rounded-lg p-4 text-center">
+                        <div class="text-3xl font-bold text-red-600">${failCount}</div>
+                        <div class="text-sm text-red-700">Failed</div>
+                    </div>
+                </div>
+                <details class="bg-gray-50 rounded-lg p-4">
+                    <summary class="cursor-pointer font-semibold text-gray-700">View Details</summary>
+                    <ul class="mt-3 space-y-1 text-sm text-gray-700">${details}</ul>
+                </details>
+            `;
+
+            section.classList.remove('hidden');
+        }
 
         document.getElementById('suggestPersonasBtn').addEventListener('click', async () => {
             const anthropicKey = document.getElementById('anthropicKey').value.trim();
@@ -526,10 +636,24 @@
             section.classList.remove('hidden');
         }
 
-        document.getElementById('generateBtn').addEventListener('click', async () => {
+        document.getElementById('generateFromPersonasBtn').addEventListener('click', generateUtterances);
+
+        document.getElementById('generateBtn').addEventListener('click', generateUtterances);
+
+        async function generateUtterances() {
             clearStatus();
             const anthropicKey = document.getElementById('anthropicKey').value.trim();
             const utteranceCount = parseInt(document.getElementById('utteranceSlider').value);
+            
+            if (!anthropicKey) {
+                addStatus('⚠️ Anthropic API Key required', 'error');
+                return;
+            }
+
+            if (selectedEntityNames.length === 0) {
+                addStatus('⚠️ Please select at least one entity', 'error');
+                return;
+            }
             
             // Check if sample data was fetched
             const hasSampleData = Object.keys(sampleDataCache).length > 0;
@@ -538,7 +662,7 @@
                     '⚠️ WARNING: You haven\'t fetched sample data yet!\n\n' +
                     'Without sample data, queries may use fictional values that don\'t exist in your database.\n' +
                     'This will likely result in validation failures (0 results).\n\n' +
-                    '📊 Recommendation: Click "Fetch Sample Data" first for best results.\n\n' +
+                    '📊 Recommendation: Click "Get Sample Data" first for best results.\n\n' +
                     'Continue anyway?'
                 );
                 
@@ -550,11 +674,12 @@
                 addStatus('✅ Using sample data for realistic queries', 'success');
             }
             
-            const btn = document.getElementById('generateBtn');
+            const btn = event.target.closest('button');
             setLoading(btn, true, 'Generating...');
             generatedDataset = [];
 
-            const entities = Object.keys(discoveredEntities).slice(0, 5);
+            // Use only selected entities
+            const entities = selectedEntityNames.slice(0, 5);  // Limit to 5 for performance
             
             // Determine generation strategy
             let generationInfo = '';
@@ -621,7 +746,7 @@
             } finally {
                 setLoading(btn, false, '✨ Generate Utterances');
             }
-        });
+        }
 
         function displayResults(dataset) {
             const section = document.getElementById('resultsSection');
@@ -679,6 +804,9 @@
                 const personaBadge = item.persona ? 
                     `<span class="bg-orange-100 text-orange-800 text-xs px-2 py-1 rounded">👤 ${item.persona}</span>` : '';
                 
+                const warningBadge = item.warning ? 
+                    `<span class="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded" title="${item.warning}">⚠️ Modified</span>` : '';
+                
                 return `
                 <div class="${statusClass} rounded-lg p-4 border hover:shadow-md transition" data-index="${index}">
                     <div class="flex justify-between items-start mb-2">
@@ -687,18 +815,32 @@
                                 <span class="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded">${item.entity}</span>
                                 <span class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded">${item.complexity}</span>
                                 ${personaBadge}
+                                ${warningBadge}
                                 ${statusBadge}
                             </div>
                             <p class="text-gray-800 font-medium">${item.utterance}</p>
                         </div>
-                        <button class="test-btn ml-4 px-4 py-2 ${item.validated !== undefined ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'} text-white text-sm rounded-lg transition" 
-                                data-index="${index}" ${item.validating ? 'disabled' : ''}>
-                            ${item.validating ? '⏳ Testing...' : '🧪 Test'}
-                        </button>
+                        <div class="flex gap-2 ml-4">
+                            <button class="edit-btn px-3 py-2 bg-gray-600 hover:bg-gray-700 text-white text-sm rounded-lg transition" 
+                                    data-index="${index}">
+                                ✏️ Edit
+                            </button>
+                            <button class="test-btn px-4 py-2 ${item.validated !== undefined ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'} text-white text-sm rounded-lg transition" 
+                                    data-index="${index}" ${item.validating ? 'disabled' : ''}>
+                                ${item.validating ? '⏳ Testing...' : '🧪 Test'}
+                            </button>
+                        </div>
                     </div>
-                    <div class="bg-gray-900 text-green-400 p-3 rounded text-sm font-mono overflow-x-auto mb-2">
-                        ${item.suggested_endpoint}
+                    <div class="endpoint-display" data-index="${index}">
+                        <div class="bg-gray-900 text-green-400 p-3 rounded text-sm font-mono overflow-x-auto mb-2">
+                            ${item.suggested_endpoint}
+                        </div>
                     </div>
+                    ${item.warning ? `
+                        <div class="text-xs text-yellow-700 bg-yellow-50 p-2 rounded mb-2">
+                            ⚠️ ${item.warning}
+                        </div>
+                    ` : ''}
                     ${item.validation_message ? `
                         <div class="mt-2 p-3 rounded ${item.validated ? 'bg-green-50' : 'bg-red-50'}">
                             <div class="text-xs ${item.validated ? 'text-green-700' : 'text-red-700'} font-semibold mb-1">
@@ -752,7 +894,71 @@
                 });
             });
 
+            // Attach event listeners to edit buttons
+            document.querySelectorAll('.edit-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const index = parseInt(e.target.dataset.index);
+                    editEndpoint(index);
+                });
+            });
+
             section.classList.remove('hidden');
+        }
+
+        function editEndpoint(index) {
+            const item = generatedDataset[index];
+            const displayDiv = document.querySelector(`.endpoint-display[data-index="${index}"]`);
+            
+            // Create editable input
+            displayDiv.innerHTML = `
+                <div class="space-y-2">
+                    <input type="text" 
+                           class="endpoint-input w-full px-3 py-2 border border-gray-300 rounded text-sm font-mono bg-white"
+                           value="${item.suggested_endpoint}"
+                           data-index="${index}">
+                    <div class="flex gap-2">
+                        <button class="save-endpoint-btn px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-xs rounded" 
+                                data-index="${index}">
+                            ✓ Save
+                        </button>
+                        <button class="cancel-endpoint-btn px-3 py-1 bg-gray-500 hover:bg-gray-600 text-white text-xs rounded" 
+                                data-index="${index}">
+                            ✗ Cancel
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            // Focus the input
+            const input = displayDiv.querySelector('.endpoint-input');
+            input.focus();
+            input.select();
+
+            // Save button
+            displayDiv.querySelector('.save-endpoint-btn').addEventListener('click', () => {
+                const newEndpoint = input.value.trim();
+                if (newEndpoint) {
+                    item.suggested_endpoint = newEndpoint;
+                    item.manually_edited = true;
+                    // Clear validation results since endpoint changed
+                    item.validated = undefined;
+                    item.validation_message = null;
+                    addStatus(`✏️ Endpoint updated for: ${item.utterance.substring(0, 50)}...`, 'success');
+                    displayResults(generatedDataset);
+                }
+            });
+
+            // Cancel button
+            displayDiv.querySelector('.cancel-endpoint-btn').addEventListener('click', () => {
+                displayResults(generatedDataset);
+            });
+
+            // Save on Enter key
+            input.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    displayDiv.querySelector('.save-endpoint-btn').click();
+                }
+            });
         }
 
         async function testEndpoint(index) {
