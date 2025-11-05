@@ -16,7 +16,7 @@
     <div class="container mx-auto px-4 py-8 max-w-6xl">
         <div class="text-center mb-8">
             <h1 class="text-4xl font-bold text-indigo-900 mb-2">🎯 SAP OData Utterance Generator</h1>
-            <p class="text-gray-600">Generate training data from OData $metadata</p>
+            <p class="text-gray-600">Generate training data from OData $metadata with cross-entity query support</p>
         </div>
 
         <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
@@ -137,7 +137,7 @@
             <p class="text-sm text-blue-900">
                 <strong>📋 Next Steps:</strong><br>
                 1️⃣ Select entities below<br>
-                2️⃣ Click "Get Sample Data"<br>
+                2️⃣ Click "Quick Check" (fast) or "Get Sample Data" (more accurate)<br>
                 3️⃣ (Optional) Click "Suggest Personas"<br>
                 4️⃣ Click "Generate Utterances"
             </p>
@@ -157,18 +157,26 @@
                 </div>
                 
                 <div class="flex gap-3">
+                    <button id="quickCheckBtn"
+                        class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled>
+                        <span>⚡ Quick Check (Fast)</span>
+                    </button>
                     <button id="fetchSampleDataBtn"
                         class="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         disabled>
-                        <span>📊 Get Sample Data</span>
+                        <span>📊 Get Sample Data (Slower)</span>
                     </button>
                 </div>
-                <p class="text-xs text-gray-500 mt-2">💡 Select entities above, then fetch sample data to generate realistic utterances</p>
+                <p class="text-xs text-gray-500 mt-2">
+                    💡 <strong>Quick Check:</strong> Fast validation of ALL entities + expand detection<br>
+                    💡 <strong>Sample Data:</strong> Fetches real values from ALL selected entities for accurate filters (takes longer)
+                </p>
             </div>
         </div>
 
         <div id="sampleDataSection" class="hidden bg-white rounded-lg shadow-lg p-6 mb-6 fade-in">
-            <h2 class="text-2xl font-semibold text-gray-800 mb-4">✅ Sample Data Fetched</h2>
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">✅ Entity Data Status</h2>
             <div id="sampleDataSummary"></div>
             
             <div class="mt-6 pt-6 border-t">
@@ -375,7 +383,7 @@
             content.innerHTML = `
                 <div class="bg-indigo-50 rounded-lg p-4 mb-4">
                     <h3 class="font-semibold text-indigo-900 mb-2">Total Entities Discovered: ${count}</h3>
-                    <p class="text-sm text-indigo-700">Select entities below to fetch sample data and generate utterances</p>
+                    <p class="text-sm text-indigo-700">Select entities below, then choose Quick Check or Sample Data</p>
                 </div>
             `;
 
@@ -405,6 +413,7 @@
 
             section.classList.remove('hidden');
             document.getElementById('workflowNotice').classList.remove('hidden');
+            document.getElementById('quickCheckBtn').disabled = false;
             document.getElementById('fetchSampleDataBtn').disabled = false;
         }
 
@@ -412,7 +421,9 @@
             selectedEntityNames = Array.from(document.querySelectorAll('.entity-checkbox:checked'))
                 .map(cb => cb.value);
             
+            const quickCheckBtn = document.getElementById('quickCheckBtn');
             const fetchBtn = document.getElementById('fetchSampleDataBtn');
+            quickCheckBtn.disabled = selectedEntityNames.length === 0;
             fetchBtn.disabled = selectedEntityNames.length === 0;
             
             // Update select all checkbox state
@@ -423,6 +434,118 @@
             selectAll.indeterminate = checkedCount > 0 && checkedCount < allCheckboxes.length;
             
             console.log(`Selected ${selectedEntityNames.length} entities:`, selectedEntityNames);
+        }
+
+        // NEW: Quick Check button
+        document.getElementById('quickCheckBtn').addEventListener('click', async () => {
+            const serviceUrl = document.getElementById('serviceUrl').value.trim() || 
+                              document.getElementById('metadataUrl').value.trim().replace('/$metadata', '');
+            const authConfig = getAuthConfig();
+            
+            if (!serviceUrl) {
+                addStatus('⚠️ Please provide a service URL to check entities', 'error');
+                return;
+            }
+
+            if (selectedEntityNames.length === 0) {
+                addStatus('⚠️ Please select at least one entity', 'error');
+                return;
+            }
+
+            const btn = document.getElementById('quickCheckBtn');
+            setLoading(btn, true, 'Checking...');
+            addStatus(`⚡ Quick checking ${selectedEntityNames.length} entities...`, 'info');
+
+            try {
+                // Filter entities to only selected ones
+                const selectedEntities = {};
+                selectedEntityNames.forEach(name => {
+                    if (discoveredEntities[name]) {
+                        selectedEntities[name] = discoveredEntities[name];
+                    }
+                });
+
+                const response = await fetch(`${API_BASE}/check-entities`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        service_url: serviceUrl,
+                        entities: selectedEntities,
+                        auth_config: authConfig
+                    })
+                });
+
+                if (!response.ok) throw new Error('Failed to check entities');
+
+                const data = await response.json();
+                
+                // Update discovered entities with expandable nav props
+                Object.keys(data.entity_status).forEach(entityName => {
+                    if (discoveredEntities[entityName]) {
+                        discoveredEntities[entityName].expandable_nav_props = 
+                            data.entity_status[entityName].expandable_nav_props || [];
+                    }
+                });
+                
+                addStatus(`✅ Checked ${data.summary.available}/${data.summary.total} entities (${data.summary.expandable} with $expand)`, 'success');
+                
+                displayQuickCheckSummary(data.entity_status, data.summary);
+
+            } catch (error) {
+                addStatus(`❌ ${error.message}`, 'error');
+            } finally {
+                setLoading(btn, false, '⚡ Quick Check (Fast)');
+            }
+        });
+
+        function displayQuickCheckSummary(entityStatus, summary) {
+            const section = document.getElementById('sampleDataSection');
+            const summaryDiv = document.getElementById('sampleDataSummary');
+
+            const available = summary.available;
+            const unavailable = summary.total - summary.available;
+            const expandable = summary.expandable;
+
+            const details = Object.entries(entityStatus).map(([entity, status]) => {
+                if (status.available) {
+                    const expandInfo = status.expandable_nav_props && status.expandable_nav_props.length > 0
+                        ? ` (🔗 ${status.expandable_nav_props.length} expandable: ${status.expandable_nav_props.slice(0,2).join(', ')})`
+                        : '';
+                    return `<li>✅ <strong>${entity}</strong>: ${status.record_count || 0} records${expandInfo}</li>`;
+                } else {
+                    return `<li>❌ <strong>${entity}</strong>: ${status.error || 'Not available'}</li>`;
+                }
+            }).join('');
+
+            summaryDiv.innerHTML = `
+                <div class="bg-blue-50 border-l-4 border-blue-500 p-4 mb-4">
+                    <p class="text-sm text-blue-900">
+                        <strong>⚡ Quick Check Complete</strong><br>
+                        All entities validated. You can now generate utterances (including cross-entity queries with $expand).<br>
+                        <strong>Tip:</strong> For even better results with realistic filter values, use "Get Sample Data" button.
+                    </p>
+                </div>
+                <div class="grid grid-cols-3 gap-4 mb-4">
+                    <div class="bg-green-50 rounded-lg p-4 text-center">
+                        <div class="text-3xl font-bold text-green-600">${available}</div>
+                        <div class="text-sm text-green-700">Available</div>
+                    </div>
+                    <div class="bg-purple-50 rounded-lg p-4 text-center">
+                        <div class="text-3xl font-bold text-purple-600">${expandable}</div>
+                        <div class="text-sm text-purple-700">With $expand</div>
+                    </div>
+                    <div class="bg-red-50 rounded-lg p-4 text-center">
+                        <div class="text-3xl font-bold text-red-600">${unavailable}</div>
+                        <div class="text-sm text-red-700">Unavailable</div>
+                    </div>
+                </div>
+                <details class="bg-gray-50 rounded-lg p-4">
+                    <summary class="cursor-pointer font-semibold text-gray-700">View Entity Details</summary>
+                    <ul class="mt-3 space-y-1 text-sm text-gray-700">${details}</ul>
+                </details>
+            `;
+
+            section.classList.remove('hidden');
         }
 
         document.getElementById('fetchSampleDataBtn').addEventListener('click', async () => {
@@ -441,8 +564,8 @@
             }
 
             const btn = document.getElementById('fetchSampleDataBtn');
-            setLoading(btn, true, 'Fetching sample data...');
-            addStatus(`📊 Fetching sample data from ${selectedEntityNames.length} selected entities...`, 'info');
+            setLoading(btn, true, 'Fetching...');
+            addStatus(`📊 Fetching sample data from ALL ${selectedEntityNames.length} selected entities (this may take a while)...`, 'info');
 
             try {
                 // Filter entities to only selected ones
@@ -469,22 +592,22 @@
                 const data = await response.json();
                 sampleDataCache = data.samples;
                 
-                const successCount = Object.keys(sampleDataCache).filter(k => !sampleDataCache[k].error).length;
-                addStatus(`✅ Fetched sample data from ${successCount} entities!`, 'success');
+                const successCount = data.summary.successful;
+                addStatus(`✅ Fetched sample data from ${successCount}/${data.summary.total} entities (${data.summary.with_nav_props} with $expand)!`, 'success');
                 
-                displaySampleDataSummary(sampleDataCache);
+                displaySampleDataSummary(sampleDataCache, data.summary);
 
             } catch (error) {
                 addStatus(`❌ ${error.message}`, 'error');
                 sampleDataCache = {};
             } finally {
-                setLoading(btn, false, '📊 Get Sample Data');
+                setLoading(btn, false, '📊 Get Sample Data (Slower)');
             }
         });
 
-        function displaySampleDataSummary(samples) {
+        function displaySampleDataSummary(samples, summary) {
             const section = document.getElementById('sampleDataSection');
-            const summary = document.getElementById('sampleDataSummary');
+            const summaryDiv = document.getElementById('sampleDataSummary');
 
             let successCount = 0;
             let failCount = 0;
@@ -504,7 +627,14 @@
                 }
             }).join('');
 
-            summary.innerHTML = `
+            summaryDiv.innerHTML = `
+                <div class="bg-green-50 border-l-4 border-green-500 p-4 mb-4">
+                    <p class="text-sm text-green-900">
+                        <strong>✅ Sample Data Ready</strong><br>
+                        Real values fetched from ${successCount} entities (${summary.with_nav_props} support cross-entity $expand).<br>
+                        Utterances will use actual values from your database for guaranteed results!
+                    </p>
+                </div>
                 <div class="grid grid-cols-3 gap-4 mb-4">
                     <div class="bg-green-50 rounded-lg p-4 text-center">
                         <div class="text-3xl font-bold text-green-600">${successCount}</div>
@@ -638,8 +768,6 @@
 
         document.getElementById('generateFromPersonasBtn').addEventListener('click', generateUtterances);
 
-        document.getElementById('generateBtn').addEventListener('click', generateUtterances);
-
         async function generateUtterances() {
             clearStatus();
             const anthropicKey = document.getElementById('anthropicKey').value.trim();
@@ -678,8 +806,8 @@
             setLoading(btn, true, 'Generating...');
             generatedDataset = [];
 
-            // Use only selected entities
-            const entities = selectedEntityNames.slice(0, 5);  // Limit to 5 for performance
+            // Use selected entities
+            const entities = selectedEntityNames.slice(0, 10);  // Limit to 10 for performance
             
             // Determine generation strategy
             let generationInfo = '';
@@ -761,12 +889,17 @@
             const validated = dataset.filter(d => d.validated === true).length;
             const failed = dataset.filter(d => d.validated === false).length;
             const untested = dataset.filter(d => d.validated === undefined).length;
+            const withExpand = dataset.filter(d => d.suggested_endpoint && d.suggested_endpoint.includes('$expand')).length;
 
             statsBar.innerHTML = `
-                <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div class="grid grid-cols-2 md:grid-cols-6 gap-4">
                     <div class="text-center bg-white p-3 rounded-lg">
                         <div class="text-3xl font-bold text-indigo-600">${dataset.length}</div>
                         <div class="text-sm text-gray-600">Total</div>
+                    </div>
+                    <div class="text-center bg-white p-3 rounded-lg">
+                        <div class="text-3xl font-bold text-purple-600">${withExpand}</div>
+                        <div class="text-sm text-gray-600">🔗 Cross-entity</div>
                     </div>
                     <div class="text-center bg-white p-3 rounded-lg">
                         <div class="text-3xl font-bold text-green-600">${validated}</div>
@@ -782,7 +915,7 @@
                     </div>
                     ${Object.entries(byComplexity).slice(0, 1).map(([k, v]) => `
                         <div class="text-center bg-white p-3 rounded-lg">
-                            <div class="text-3xl font-bold text-purple-600">${v}</div>
+                            <div class="text-3xl font-bold text-blue-600">${v}</div>
                             <div class="text-sm text-gray-600">${k}</div>
                         </div>
                     `).join('')}
@@ -807,13 +940,17 @@
                 const warningBadge = item.warning ? 
                     `<span class="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded" title="${item.warning}">⚠️ Modified</span>` : '';
                 
+                const expandBadge = item.suggested_endpoint && item.suggested_endpoint.includes('$expand') ?
+                    '<span class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded">🔗 Cross-entity</span>' : '';
+                
                 return `
                 <div class="${statusClass} rounded-lg p-4 border hover:shadow-md transition" data-index="${index}">
                     <div class="flex justify-between items-start mb-2">
                         <div class="flex-1">
                             <div class="flex items-center gap-2 mb-2">
                                 <span class="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded">${item.entity}</span>
-                                <span class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded">${item.complexity}</span>
+                                <span class="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded">${item.complexity}</span>
+                                ${expandBadge}
                                 ${personaBadge}
                                 ${warningBadge}
                                 ${statusBadge}

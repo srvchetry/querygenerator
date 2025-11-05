@@ -84,7 +84,14 @@ def parse_odata_metadata(xml_content):
                 for nav in entity_type.findall(f'{{{ns}}}NavigationProperty'):
                     nav_name = nav.get('Name')
                     if nav_name:
-                        nav_props.append(nav_name)
+                        # Also try to get the target entity from Relationship attribute
+                        relationship = nav.get('Relationship', '')
+                        to_role = nav.get('ToRole', '')
+                        nav_props.append({
+                            'name': nav_name,
+                            'relationship': relationship,
+                            'to_role': to_role
+                        })
                 
                 entities[entity_name] = {
                     'properties': properties[:20],  # Limit to first 20
@@ -389,6 +396,110 @@ Return ONLY valid JSON:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/check-entities', methods=['POST'])
+def check_entities():
+    """Lightweight check of entity availability and expandability without fetching data"""
+    print("\n" + "="*60)
+    print("🔍 CHECK ENTITIES (LIGHTWEIGHT)")
+    print("="*60)
+    
+    try:
+        data = request.json
+        service_url = data.get('service_url', '').strip()
+        entities = data.get('entities', {})
+        auth_config = data.get('auth_config', {})
+        
+        if not service_url or not entities:
+            return jsonify({'error': 'Service URL and entities required'}), 400
+        
+        print(f"📦 Checking {len(entities)} entities...")
+        
+        headers = build_auth_headers(auth_config)
+        
+        entity_status = {}
+        
+        for entity_name, entity_info in entities.items():
+            try:
+                # Just check if entity exists with $top=1 and $inlinecount
+                url = f"{service_url.rstrip('/')}/{entity_name}?$top=1&$inlinecount=allpages&$format=json"
+                
+                response = requests.get(url, headers=headers, timeout=10)
+                
+                if response.status_code == 200:
+                    json_data = response.json()
+                    
+                    # Get record count
+                    count = 0
+                    if isinstance(json_data, dict):
+                        if 'd' in json_data:
+                            if '__count' in json_data['d']:
+                                count = int(json_data['d']['__count'])
+                            elif 'results' in json_data['d']:
+                                count = len(json_data['d']['results'])
+                        elif '@odata.count' in json_data:
+                            count = json_data['@odata.count']
+                    
+                    # Check navigation properties
+                    nav_props = entity_info.get('navigation_properties', [])
+                    expandable = []
+                    
+                    for nav in nav_props:
+                        if isinstance(nav, dict):
+                            nav_name = nav.get('name', '')
+                            if nav_name:
+                                expandable.append(nav_name)
+                        elif isinstance(nav, str):
+                            expandable.append(nav)
+                    
+                    entity_status[entity_name] = {
+                        'available': True,
+                        'record_count': count,
+                        'expandable_nav_props': expandable,
+                        'has_data': count > 0
+                    }
+                    
+                    status_icon = "✅" if count > 0 else "⚠️"
+                    expand_info = f" ({len(expandable)} expandable)" if expandable else ""
+                    print(f"  {status_icon} {entity_name}: {count} records{expand_info}")
+                    
+                else:
+                    entity_status[entity_name] = {
+                        'available': False,
+                        'error': f'HTTP {response.status_code}',
+                        'expandable_nav_props': []
+                    }
+                    print(f"  ❌ {entity_name}: HTTP {response.status_code}")
+                    
+            except Exception as e:
+                entity_status[entity_name] = {
+                    'available': False,
+                    'error': str(e)[:100],
+                    'expandable_nav_props': []
+                }
+                print(f"  ❌ {entity_name}: {str(e)[:50]}")
+        
+        available_count = sum(1 for s in entity_status.values() if s.get('available'))
+        expandable_count = sum(1 for s in entity_status.values() if len(s.get('expandable_nav_props', [])) > 0)
+        
+        print(f"\n✅ Summary: {available_count}/{len(entities)} available, {expandable_count} with expandable nav props")
+        print("="*60 + "\n")
+        
+        return jsonify({
+            'success': True,
+            'entity_status': entity_status,
+            'summary': {
+                'total': len(entities),
+                'available': available_count,
+                'expandable': expandable_count
+            }
+        })
+        
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/sample-data', methods=['POST'])
 def fetch_sample_data():
     """Fetch sample data from entities to get real values"""
@@ -406,121 +517,96 @@ def fetch_sample_data():
         if not service_url or not entities:
             return jsonify({'error': 'Service URL and entities required'}), 400
         
-        print(f"🔍 Fetching sample data from {len(entities)} entities...")
-        print(f"📦 Sample size: {sample_size} records per entity")
+        print(f"🔍 Strategy: Process ALL selected entities, prioritizing those with navigation properties")
+        print(f"📦 Total entities to process: {len(entities)}")
+        print(f"📊 Sample size: {sample_size} records per entity")
         
         headers = build_auth_headers(auth_config)
         
         entity_samples = {}
         
-        for entity_name in list(entities.keys())[:10]:  # Limit to first 10 entities
-            try:
-                # Construct URL with proper OData parameters
-                # Add $inlinecount for SAP compatibility
-                url = f"{service_url.rstrip('/')}/{entity_name}?$top={sample_size}&$inlinecount=allpages&$format=json"
+        # Step 1: First, enrich entity info with navigation properties if not already present
+        print(f"\n🔍 Analyzing navigation properties...")
+        for entity_name, entity_info in entities.items():
+            nav_props = entity_info.get('navigation_properties', [])
+            
+            # Build expandable nav props list if not already present
+            if 'expandable_nav_props' not in entity_info or not entity_info['expandable_nav_props']:
+                expandable = []
+                nav_map = {}
                 
-                print(f"  📥 Fetching: {entity_name}")
-                print(f"     URL: {url}")
+                for nav in nav_props:
+                    if isinstance(nav, dict):
+                        nav_name = nav.get('name', '')
+                        if nav_name:
+                            expandable.append(nav_name)
+                            # Try to extract target entity from relationship
+                            relationship = nav.get('relationship', '')
+                            if relationship:
+                                # Extract target entity name from relationship
+                                # Format is usually: Namespace.AssociationName
+                                parts = relationship.split('.')
+                                if len(parts) > 1:
+                                    nav_map[nav_name] = parts[-1]
+                                else:
+                                    nav_map[nav_name] = 'Unknown'
+                    elif isinstance(nav, str):
+                        expandable.append(nav)
+                        nav_map[nav] = 'Unknown'
                 
-                response = requests.get(url, headers=headers, timeout=15)
-                
-                print(f"     Status: {response.status_code}")
-                
-                if response.status_code == 200:
-                    content_type = response.headers.get('content-type', '')
-                    print(f"     Content-Type: {content_type}")
-                    
-                    json_data = response.json()
-                    
-                    # Extract records
-                    records = []
-                    if isinstance(json_data, dict):
-                        if 'd' in json_data and 'results' in json_data['d']:
-                            records = json_data['d']['results']
-                        elif 'value' in json_data:
-                            records = json_data['value']
-                        elif 'd' in json_data and isinstance(json_data['d'], list):
-                            records = json_data['d']
-                        elif 'd' in json_data and not isinstance(json_data['d'], list):
-                            # Single record wrapped in 'd'
-                            records = [json_data['d']]
-                    
-                    if records:
-                        # Extract unique values for each property
-                        property_values = {}
-                        
-                        for record in records:
-                            for key, value in record.items():
-                                # Skip metadata and complex objects
-                                if key.startswith('__') or isinstance(value, dict) or isinstance(value, list):
-                                    continue
-                                
-                                if key not in property_values:
-                                    property_values[key] = set()
-                                
-                                # Add value if it's simple type and not null
-                                if value is not None and not isinstance(value, (dict, list)):
-                                    # Store the actual value type for better filter generation
-                                    str_value = str(value)
-                                    
-                                    # For booleans, normalize to lowercase
-                                    if isinstance(value, bool):
-                                        str_value = 'true' if value else 'false'
-                                    # For strings that look like booleans, keep as-is but add note
-                                    elif str_value.lower() in ['true', 'false']:
-                                        str_value = f"{str_value} (boolean)"
-                                    
-                                    property_values[key].add(str_value)
-                        
-                        # Convert sets to lists and limit
-                        sample_values = {}
-                        for key, values in property_values.items():
-                            sample_values[key] = list(values)[:5]  # Keep max 5 unique values per property
-                        
-                        entity_samples[entity_name] = {
-                            'record_count': len(records),
-                            'sample_values': sample_values,
-                            'sample_record': records[0] if records else None
-                        }
-                        
-                        print(f"    ✅ Got {len(records)} records, {len(sample_values)} properties")
-                    else:
-                        print(f"    ⚠️ No records returned (empty result set)")
-                        entity_samples[entity_name] = {'record_count': 0, 'sample_values': {}}
-                        
-                elif response.status_code == 401:
-                    print(f"    ❌ HTTP 401 - Authentication required or invalid API key")
-                    entity_samples[entity_name] = {'error': 'Authentication failed - check API key'}
-                elif response.status_code == 403:
-                    print(f"    ❌ HTTP 403 - Forbidden (insufficient permissions)")
-                    entity_samples[entity_name] = {'error': 'Access forbidden'}
-                elif response.status_code == 404:
-                    print(f"    ❌ HTTP 404 - Entity not found")
-                    entity_samples[entity_name] = {'error': 'Entity not found'}
-                else:
-                    error_body = response.text[:200] if response.text else 'No error message'
-                    print(f"    ❌ HTTP {response.status_code}: {error_body}")
-                    entity_samples[entity_name] = {'error': f'HTTP {response.status_code}'}
-                    
-            except requests.exceptions.Timeout:
-                print(f"    ⏱️ Timeout after 15 seconds")
-                entity_samples[entity_name] = {'error': 'Request timeout'}
-            except requests.exceptions.ConnectionError as e:
-                print(f"    ❌ Connection error: {str(e)[:100]}")
-                entity_samples[entity_name] = {'error': 'Connection failed'}
-            except json.JSONDecodeError as e:
-                print(f"    ❌ Invalid JSON response: {str(e)}")
-                entity_samples[entity_name] = {'error': 'Invalid JSON response'}
-            except Exception as e:
-                print(f"    ❌ Error: {str(e)[:100]}")
-                entity_samples[entity_name] = {'error': str(e)[:200]}
+                entity_info['expandable_nav_props'] = expandable
+                entity_info['navigation_map'] = nav_map
         
-        print(f"✅ Fetched sample data from {len(entity_samples)} entities")
+        # Step 2: Categorize entities by relationship count
+        entities_with_nav = []
+        entities_without_nav = []
+        
+        for entity_name, entity_info in entities.items():
+            nav_props = entity_info.get('expandable_nav_props', [])
+            if nav_props and len(nav_props) > 0:
+                entities_with_nav.append((entity_name, len(nav_props)))
+            else:
+                entities_without_nav.append(entity_name)
+        
+        # Sort by number of relationships (most connected first)
+        entities_with_nav.sort(key=lambda x: x[1], reverse=True)
+        
+        print(f"\n🔗 Entities with relationships: {len(entities_with_nav)}")
+        print(f"📄 Entities without relationships: {len(entities_without_nav)}")
+        
+        # Step 3: Process ALL entities with navigation properties first (NO LIMIT)
+        print(f"\n🔗 Fetching ALL entities WITH navigation properties...")
+        for entity_name, nav_count in entities_with_nav:
+            nav_props = entities[entity_name].get('expandable_nav_props', [])
+            print(f"   Processing: {entity_name} ({nav_count} nav props: {', '.join(nav_props[:3])})")
+            fetch_entity_sample(entity_name, entities[entity_name], service_url, 
+                              headers, sample_size, entity_samples)
+        
+        # Step 4: Process ALL remaining entities (NO LIMIT)
+        print(f"\n📄 Fetching ALL entities WITHOUT navigation properties...")
+        for entity_name in entities_without_nav:
+            fetch_entity_sample(entity_name, entities[entity_name], service_url, 
+                              headers, sample_size, entity_samples)
+        
+        # Step 5: Summary
+        successful = sum(1 for s in entity_samples.values() if not s.get('error'))
+        failed = sum(1 for s in entity_samples.values() if s.get('error'))
+        
+        print(f"\n✅ Completed: {successful} successful, {failed} failed")
+        print(f"📊 Total entities processed: {len(entity_samples)}/{len(entities)}")
         print("="*60 + "\n")
         
         return jsonify({
             'success': True,
-            'samples': entity_samples
+            'samples': entity_samples,
+            'summary': {
+                'total': len(entities),
+                'processed': len(entity_samples),
+                'successful': successful,
+                'failed': failed,
+                'with_nav_props': len(entities_with_nav),
+                'without_nav_props': len(entities_without_nav)
+            }
         })
         
     except Exception as e:
@@ -528,6 +614,117 @@ def fetch_sample_data():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+def fetch_entity_sample(entity_name, entity_info, service_url, headers, sample_size, entity_samples):
+    """Helper function to fetch sample data for a single entity"""
+    try:
+        # Construct URL with proper OData parameters
+        expand_param = ''
+        nav_props = entity_info.get('expandable_nav_props', [])
+        if nav_props and len(nav_props) > 0:
+            # Try expanding the first navigation property
+            expand_param = f'&$expand={nav_props[0]}'
+            print(f"  📥 {entity_name} (expanding: {nav_props[0]})")
+        else:
+            print(f"  📥 {entity_name}")
+        
+        url = f"{service_url.rstrip('/')}/{entity_name}?$top={sample_size}&$inlinecount=allpages&$format=json{expand_param}"
+        
+        print(f"  📥 Fetching: {entity_name}")
+        print(f"     URL: {url}")
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        print(f"     Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            content_type = response.headers.get('content-type', '')
+            print(f"     Content-Type: {content_type}")
+            
+            json_data = response.json()
+            
+            # Extract records
+            records = []
+            if isinstance(json_data, dict):
+                if 'd' in json_data and 'results' in json_data['d']:
+                    records = json_data['d']['results']
+                elif 'value' in json_data:
+                    records = json_data['value']
+                elif 'd' in json_data and isinstance(json_data['d'], list):
+                    records = json_data['d']
+                elif 'd' in json_data and not isinstance(json_data['d'], list):
+                    # Single record wrapped in 'd'
+                    records = [json_data['d']]
+            
+            if records:
+                # Extract unique values for each property
+                property_values = {}
+                
+                for record in records:
+                    for key, value in record.items():
+                        # Skip metadata and complex objects
+                        if key.startswith('__') or isinstance(value, dict) or isinstance(value, list):
+                            continue
+                        
+                        if key not in property_values:
+                            property_values[key] = set()
+                        
+                        # Add value if it's simple type and not null
+                        if value is not None and not isinstance(value, (dict, list)):
+                            # Store the actual value type for better filter generation
+                            str_value = str(value)
+                            
+                            # For booleans, normalize to lowercase
+                            if isinstance(value, bool):
+                                str_value = 'true' if value else 'false'
+                            # For strings that look like booleans, keep as-is but add note
+                            elif str_value.lower() in ['true', 'false']:
+                                str_value = f"{str_value} (boolean)"
+                            
+                            property_values[key].add(str_value)
+                
+                # Convert sets to lists and limit
+                sample_values = {}
+                for key, values in property_values.items():
+                    sample_values[key] = list(values)[:5]  # Keep max 5 unique values per property
+                
+                entity_samples[entity_name] = {
+                    'record_count': len(records),
+                    'sample_values': sample_values,
+                    'sample_record': records[0] if records else None
+                }
+                
+                print(f"    ✅ Got {len(records)} records, {len(sample_values)} properties")
+            else:
+                print(f"    ⚠️ No records returned (empty result set)")
+                entity_samples[entity_name] = {'record_count': 0, 'sample_values': {}}
+                
+        elif response.status_code == 401:
+            print(f"    ❌ HTTP 401 - Authentication required or invalid API key")
+            entity_samples[entity_name] = {'error': 'Authentication failed - check API key'}
+        elif response.status_code == 403:
+            print(f"    ❌ HTTP 403 - Forbidden (insufficient permissions)")
+            entity_samples[entity_name] = {'error': 'Access forbidden'}
+        elif response.status_code == 404:
+            print(f"    ❌ HTTP 404 - Entity not found")
+            entity_samples[entity_name] = {'error': 'Entity not found'}
+        else:
+            error_body = response.text[:200] if response.text else 'No error message'
+            print(f"    ❌ HTTP {response.status_code}: {error_body}")
+            entity_samples[entity_name] = {'error': f'HTTP {response.status_code}'}
+            
+    except requests.exceptions.Timeout:
+        print(f"    ⏱️ Timeout after 15 seconds")
+        entity_samples[entity_name] = {'error': 'Request timeout'}
+    except requests.exceptions.ConnectionError as e:
+        print(f"    ❌ Connection error: {str(e)[:100]}")
+        entity_samples[entity_name] = {'error': 'Connection failed'}
+    except json.JSONDecodeError as e:
+        print(f"    ❌ Invalid JSON response: {str(e)}")
+        entity_samples[entity_name] = {'error': 'Invalid JSON response'}
+    except Exception as e:
+        print(f"    ❌ Error: {str(e)[:100]}")
+        entity_samples[entity_name] = {'error': str(e)[:200]}
 
 @app.route('/api/generate-utterances', methods=['POST'])
 def generate_utterances():
@@ -559,6 +756,39 @@ def generate_utterances():
         properties = entity_info.get('properties', [])
         prop_names = [p['name'] if isinstance(p, dict) else p for p in properties]
         
+        # Get navigation properties and their targets
+        nav_properties = entity_info.get('navigation_properties', [])
+        # Extract just the names if they're dicts
+        nav_prop_names = []
+        for nav in nav_properties:
+            if isinstance(nav, dict):
+                nav_prop_names.append(nav.get('name', ''))
+            else:
+                nav_prop_names.append(nav)
+        
+        expandable_nav_props = entity_info.get('expandable_nav_props', [])
+        nav_map = entity_info.get('navigation_map', {})
+        has_relationships = len(expandable_nav_props) > 0
+        
+        # Build expandable relationships description
+        expandable_relationships = []
+        if expandable_nav_props:
+            for nav_prop in expandable_nav_props[:10]:  # Limit to 10
+                target = nav_map.get(nav_prop, 'Unknown')
+                expandable_relationships.append(f"{nav_prop} → {target}")
+        
+        print(f"  📝 Entity: {entity}")
+        print(f"  📊 Count: {count}")
+        print(f"  🔗 Expandable: {len(expandable_nav_props)} relationships")
+        if expandable_nav_props:
+            print(f"      Nav props: {', '.join(expandable_nav_props[:5])}")
+        else:
+            print(f"      No navigation properties - will generate single-entity queries only")
+        if persona:
+            print(f"  👤 Persona: {persona.get('title', 'Unknown')}")
+        if sample_data:
+            print(f"  ✨ Using real sample data from API")
+        
         client = anthropic.Anthropic(api_key=api_key)
         
         # Build persona-specific prompt
@@ -577,7 +807,28 @@ Example queries this persona might ask:
 
 Make the utterances sound natural and conversational, reflecting how {persona.get('title', 'this user')} would actually speak."""
         else:
-            persona_context = "Generate natural language queries that various users might ask."
+            persona_context = """Generate natural, human-like queries that real business users would ask.
+
+🎯 MAKE QUERIES SOUND HUMAN:
+- Use conversational language, not technical jargon
+- Think about WHY someone would query this data (business goals)
+- Use natural time references: "today", "this week", "last month", "this year"
+- Use business context, not just field names
+- Make it sound like something someone would actually say to a colleague
+
+GOOD EXAMPLES (human-like):
+✅ "Show me today's new orders"
+✅ "Which employees are on leave this week?"
+✅ "Find customers who haven't ordered in 3 months"
+✅ "I need to check overdue invoices"
+✅ "What's the status of project X?"
+
+BAD EXAMPLES (too technical):
+❌ "Execute GET operation on Orders entity with filter CreatedDate"
+❌ "Retrieve records where IsActive eq true"
+❌ "List all entities with top 20 parameter"
+❌ "Query the database for employee records"
+"""
         
         # Build property info with data types
         property_details = []
@@ -729,6 +980,17 @@ Return ONLY valid JSON array:
             utterances_text = utterances_text.split('```')[1].split('```')[0].strip()
         
         utterances = json.loads(utterances_text)
+        
+        # Count how many use $expand
+        expand_count = sum(1 for u in utterances if '$expand' in u.get('suggested_endpoint', '').lower())
+        total_count = len(utterances)
+        expand_percentage = (expand_count / total_count * 100) if total_count > 0 else 0
+        
+        print(f"  📊 Cross-entity queries: {expand_count}/{total_count} ({expand_percentage:.0f}%)")
+        
+        if expand_count < total_count * 0.3 and has_relationships:
+            print(f"  ⚠️ Warning: Low $expand usage despite {len(expandable_nav_props)} nav props available")
+            print(f"      Available: {', '.join(expandable_nav_props[:5])}")
         
         # POST-PROCESS: Ensure every endpoint has $top to prevent buffer overflow
         # AND remove non-filterable properties from $filter clauses
