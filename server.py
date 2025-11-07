@@ -6,6 +6,30 @@ import json
 import xml.etree.ElementTree as ET
 import re
 
+
+# Configuration Constants (Defaults)
+MAX_PROPERTIES_PER_ENTITY = 30
+MAX_NAV_PROPS_PER_ENTITY = 20
+MAX_SAMPLE_VALUES_PER_PROPERTY = 8
+MAX_PROPERTIES_TO_DISPLAY = 40
+METADATA_FETCH_TIMEOUT = 30
+ENTITY_CHECK_TIMEOUT = 10
+DATA_FETCH_TIMEOUT = 15
+ENDPOINT_VALIDATION_TIMEOUT = 15
+
+def get_limit(advanced_settings, key, default):
+    """Get limit from advanced settings or use default"""
+    if not advanced_settings or not isinstance(advanced_settings, dict):
+        return default
+    setting_map = {
+        'max_properties': 'maxProperties',
+        'max_nav_props': 'maxNavProps',
+        'max_sample_values': 'maxSampleValues',
+        'max_props_display': 'maxPropsDisplay'
+    }
+    return advanced_settings.get(setting_map.get(key, key), default)
+
+
 app = Flask(__name__, static_folder='.')
 CORS(app)
 
@@ -17,9 +41,15 @@ def index():
 def test():
     return jsonify({'status': 'ok', 'message': 'Server is running!'})
 
-def parse_odata_metadata(xml_content):
-    """Parse OData $metadata XML to extract all entities"""
+def parse_odata_metadata(xml_content, advanced_settings=None):
+    """Parse OData $metadata XML to extract all entities and associations"""
     print("📊 Parsing OData metadata XML...")
+    
+    # Get limits from settings or use defaults
+    max_properties = get_limit(advanced_settings, 'max_properties', MAX_PROPERTIES_PER_ENTITY)
+    max_nav_props = get_limit(advanced_settings, 'max_nav_props', MAX_NAV_PROPS_PER_ENTITY)
+    
+    print(f"   Using limits: {max_properties} properties, {max_nav_props} nav props")
     
     try:
         # Remove BOM if present
@@ -40,6 +70,7 @@ def parse_odata_metadata(xml_content):
         
         entities = {}
         entity_containers = {}
+        associations = {}  # Store association information
         
         # First pass: Get all EntityType definitions
         for ns_prefix in ['edm', 'edm2', 'edm3']:
@@ -86,18 +117,45 @@ def parse_odata_metadata(xml_content):
                     if nav_name:
                         # Also try to get the target entity from Relationship attribute
                         relationship = nav.get('Relationship', '')
+                        from_role = nav.get('FromRole', '')
                         to_role = nav.get('ToRole', '')
                         nav_props.append({
                             'name': nav_name,
                             'relationship': relationship,
+                            'from_role': from_role,
                             'to_role': to_role
                         })
                 
                 entities[entity_name] = {
-                    'properties': properties[:20],  # Limit to first 20
+                    'properties': properties if max_properties == -1 else properties[:max_properties],
                     'keys': keys,
-                    'navigation_properties': nav_props[:15]
+                    'navigation_properties': nav_props if max_nav_props == -1 else nav_props[:max_nav_props]
                 }
+        
+        # NEW: Parse Association definitions to understand relationships
+        for ns_prefix in ['edm', 'edm2', 'edm3']:
+            ns = namespaces.get(ns_prefix, '')
+            if not ns:
+                continue
+            
+            for assoc in root.findall(f'.//{{{ns}}}Association'):
+                assoc_name = assoc.get('Name')
+                if not assoc_name:
+                    continue
+                
+                ends = assoc.findall(f'{{{ns}}}End')
+                if len(ends) >= 2:
+                    end1 = ends[0]
+                    end2 = ends[1]
+                    
+                    associations[assoc_name] = {
+                        'role1': end1.get('Role', ''),
+                        'type1': end1.get('Type', '').split('.')[-1],
+                        'multiplicity1': end1.get('Multiplicity', '1'),
+                        'role2': end2.get('Role', ''),
+                        'type2': end2.get('Type', '').split('.')[-1],
+                        'multiplicity2': end2.get('Multiplicity', '1')
+                    }
         
         # Second pass: Get all EntitySet definitions (these are the actual endpoints)
         for ns_prefix in ['edm', 'edm2', 'edm3']:
@@ -114,14 +172,35 @@ def parse_odata_metadata(xml_content):
                     type_name = entity_type.split('.')[-1]
                     
                     if type_name in entities:
+                        # Enrich navigation properties with association details
+                        enriched_nav_props = []
+                        for nav_prop in entities[type_name]['navigation_properties']:
+                            enriched_nav = nav_prop.copy()
+                            
+                            # Look up association details
+                            rel_name = nav_prop.get('relationship', '').split('.')[-1]
+                            if rel_name in associations:
+                                assoc = associations[rel_name]
+                                to_role = nav_prop.get('to_role', '')
+                                
+                                # Determine target entity and multiplicity
+                                if to_role == assoc['role1']:
+                                    enriched_nav['target_entity'] = assoc['type1']
+                                    enriched_nav['multiplicity'] = assoc['multiplicity1']
+                                elif to_role == assoc['role2']:
+                                    enriched_nav['target_entity'] = assoc['type2']
+                                    enriched_nav['multiplicity'] = assoc['multiplicity2']
+                            
+                            enriched_nav_props.append(enriched_nav)
+                        
                         entity_containers[set_name] = {
                             'entity_type': type_name,
                             'properties': entities[type_name]['properties'],
                             'keys': entities[type_name]['keys'],
-                            'navigation_properties': entities[type_name]['navigation_properties']
+                            'navigation_properties': enriched_nav_props
                         }
         
-        print(f"✅ Found {len(entity_containers)} EntitySets")
+        print(f"✅ Found {len(entity_containers)} EntitySets, {len(associations)} Associations")
         for i, name in enumerate(list(entity_containers.keys())[:5]):
             print(f"   {i+1}. {name}")
         
@@ -191,7 +270,7 @@ def fetch_metadata():
             # Construct metadata URL from service URL
             url = service_url.rstrip('/') + '/$metadata'
         else:
-            return jsonify({'error': 'Either metadata_url or service_url is required'}), 400
+            return jsonify({'success': False, 'error': 'Either metadata_url or service_url is required'}), 400
         
         print(f"🔍 Fetching: {url}")
         print(f"🔐 Auth type: {auth_config.get('type', 'none')}")
@@ -206,7 +285,7 @@ def fetch_metadata():
         print(f"📋 Request headers: Accept: {headers.get('Accept')}")
         
         # Fetch the metadata
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=headers, timeout=METADATA_FETCH_TIMEOUT)
         
         print(f"📊 Status: {response.status_code}")
         print(f"📊 Content-Type: {response.headers.get('content-type', 'unknown')}")
@@ -234,7 +313,8 @@ def fetch_metadata():
         
         # Parse the metadata
         xml_content = response.text
-        entities = parse_odata_metadata(xml_content)
+        advanced_settings = data.get('advanced_settings', None)
+        entities = parse_odata_metadata(xml_content, advanced_settings)
         
         if not entities:
             return jsonify({
@@ -253,12 +333,12 @@ def fetch_metadata():
         
     except requests.exceptions.RequestException as e:
         print(f"❌ Network error: {str(e)}")
-        return jsonify({'error': f'Network error: {str(e)}'}), 500
+        return jsonify({'success': False, 'error': f'Network error: {str(e)}'}), 500
     except Exception as e:
         print(f"❌ Error: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/manual-entities', methods=['POST'])
 def manual_entities():
@@ -272,7 +352,7 @@ def manual_entities():
         entity_names = data.get('entity_names', [])
         
         if not entity_names:
-            return jsonify({'error': 'No entity names provided'}), 400
+            return jsonify({'success': False, 'error': 'No entity names provided'}), 400
         
         print(f"📦 Received {len(entity_names)} entities:")
         for name in entity_names[:10]:
@@ -299,7 +379,7 @@ def manual_entities():
         
     except Exception as e:
         print(f"❌ Error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/suggest-personas', methods=['POST'])
 def suggest_personas():
@@ -314,7 +394,7 @@ def suggest_personas():
         api_key = data.get('api_key')
         
         if not entities or not api_key:
-            return jsonify({'error': 'Entities and API key required'}), 400
+            return jsonify({'success': False, 'error': 'Entities and API key required'}), 400
         
         entity_list = list(entities.keys())[:10]
         print(f"📦 Analyzing {len(entity_list)} entities...")
@@ -394,7 +474,7 @@ Return ONLY valid JSON:
         print(f"❌ Error: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/check-entities', methods=['POST'])
 def check_entities():
@@ -410,7 +490,7 @@ def check_entities():
         auth_config = data.get('auth_config', {})
         
         if not service_url or not entities:
-            return jsonify({'error': 'Service URL and entities required'}), 400
+            return jsonify({'success': False, 'error': 'Service URL and entities required'}), 400
         
         print(f"📦 Checking {len(entities)} entities...")
         
@@ -423,7 +503,7 @@ def check_entities():
                 # Just check if entity exists with $top=1 and $inlinecount
                 url = f"{service_url.rstrip('/')}/{entity_name}?$top=1&$inlinecount=allpages&$format=json"
                 
-                response = requests.get(url, headers=headers, timeout=10)
+                response = requests.get(url, headers=headers, timeout=ENTITY_CHECK_TIMEOUT)
                 
                 if response.status_code == 200:
                     json_data = response.json()
@@ -498,7 +578,7 @@ def check_entities():
         print(f"❌ Error: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/sample-data', methods=['POST'])
 def fetch_sample_data():
@@ -513,11 +593,16 @@ def fetch_sample_data():
         entities = data.get('entities', {})
         auth_config = data.get('auth_config', {})
         sample_size = data.get('sample_size', 5)
+        advanced_settings = data.get('advanced_settings', None)
+        
+        # Get limits
+        max_sample_values = get_limit(advanced_settings, 'max_sample_values', MAX_SAMPLE_VALUES_PER_PROPERTY)
         
         if not service_url or not entities:
-            return jsonify({'error': 'Service URL and entities required'}), 400
+            return jsonify({'success': False, 'error': 'Service URL and entities required'}), 400
         
         print(f"🔍 Strategy: Process ALL selected entities, prioritizing those with navigation properties")
+        print(f"   Max sample values per property: {max_sample_values}")
         print(f"📦 Total entities to process: {len(entities)}")
         print(f"📊 Sample size: {sample_size} records per entity")
         
@@ -530,32 +615,48 @@ def fetch_sample_data():
         for entity_name, entity_info in entities.items():
             nav_props = entity_info.get('navigation_properties', [])
             
-            # Build expandable nav props list if not already present
-            if 'expandable_nav_props' not in entity_info or not entity_info['expandable_nav_props']:
-                expandable = []
-                nav_map = {}
-                
-                for nav in nav_props:
-                    if isinstance(nav, dict):
-                        nav_name = nav.get('name', '')
-                        if nav_name:
-                            expandable.append(nav_name)
-                            # Try to extract target entity from relationship
+            # Build expandable nav props list with enhanced information
+            expandable = []
+            nav_map = {}
+            nav_details = []  # NEW: Store detailed info for each nav prop
+            
+            for nav in nav_props:
+                if isinstance(nav, dict):
+                    nav_name = nav.get('name', '')
+                    if nav_name:
+                        expandable.append(nav_name)
+                        
+                        # Get target entity - try multiple sources
+                        target_entity = nav.get('target_entity', '')
+                        if not target_entity:
+                            # Try to extract from relationship
                             relationship = nav.get('relationship', '')
                             if relationship:
-                                # Extract target entity name from relationship
-                                # Format is usually: Namespace.AssociationName
                                 parts = relationship.split('.')
-                                if len(parts) > 1:
-                                    nav_map[nav_name] = parts[-1]
-                                else:
-                                    nav_map[nav_name] = 'Unknown'
-                    elif isinstance(nav, str):
-                        expandable.append(nav)
-                        nav_map[nav] = 'Unknown'
-                
-                entity_info['expandable_nav_props'] = expandable
-                entity_info['navigation_map'] = nav_map
+                                target_entity = parts[-1] if len(parts) > 1 else 'Unknown'
+                        
+                        nav_map[nav_name] = target_entity
+                        
+                        # NEW: Store detailed navigation information
+                        nav_details.append({
+                            'name': nav_name,
+                            'target_entity': target_entity,
+                            'multiplicity': nav.get('multiplicity', '*'),
+                            'relationship': nav.get('relationship', '').split('.')[-1]
+                        })
+                elif isinstance(nav, str):
+                    expandable.append(nav)
+                    nav_map[nav] = 'Unknown'
+                    nav_details.append({
+                        'name': nav,
+                        'target_entity': 'Unknown',
+                        'multiplicity': '*',
+                        'relationship': ''
+                    })
+            
+            entity_info['expandable_nav_props'] = expandable
+            entity_info['navigation_map'] = nav_map
+            entity_info['navigation_details'] = nav_details  # NEW: Store detailed info
         
         # Step 2: Categorize entities by relationship count
         entities_with_nav = []
@@ -580,13 +681,13 @@ def fetch_sample_data():
             nav_props = entities[entity_name].get('expandable_nav_props', [])
             print(f"   Processing: {entity_name} ({nav_count} nav props: {', '.join(nav_props[:3])})")
             fetch_entity_sample(entity_name, entities[entity_name], service_url, 
-                              headers, sample_size, entity_samples)
+                              headers, sample_size, entity_samples, max_sample_values)
         
         # Step 4: Process ALL remaining entities (NO LIMIT)
         print(f"\n📄 Fetching ALL entities WITHOUT navigation properties...")
         for entity_name in entities_without_nav:
             fetch_entity_sample(entity_name, entities[entity_name], service_url, 
-                              headers, sample_size, entity_samples)
+                              headers, sample_size, entity_samples, max_sample_values)
         
         # Step 5: Summary
         successful = sum(1 for s in entity_samples.values() if not s.get('error'))
@@ -596,9 +697,17 @@ def fetch_sample_data():
         print(f"📊 Total entities processed: {len(entity_samples)}/{len(entities)}")
         print("="*60 + "\n")
         
+        # Build navigation graph for entities with navigation properties
+        navigation_graph = {}
+        for entity_name, entity_info in entities.items():
+            nav_details = entity_info.get('navigation_details', [])
+            if nav_details:
+                navigation_graph[entity_name] = nav_details
+        
         return jsonify({
             'success': True,
             'samples': entity_samples,
+            'navigation_graph': navigation_graph,  # NEW: Include navigation graph
             'summary': {
                 'total': len(entities),
                 'processed': len(entity_samples),
@@ -613,9 +722,9 @@ def fetch_sample_data():
         print(f"❌ Error: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-def fetch_entity_sample(entity_name, entity_info, service_url, headers, sample_size, entity_samples):
+def fetch_entity_sample(entity_name, entity_info, service_url, headers, sample_size, entity_samples, max_sample_values=MAX_SAMPLE_VALUES_PER_PROPERTY):
     """Helper function to fetch sample data for a single entity"""
     try:
         # Construct URL with proper OData parameters
@@ -633,7 +742,7 @@ def fetch_entity_sample(entity_name, entity_info, service_url, headers, sample_s
         print(f"  📥 Fetching: {entity_name}")
         print(f"     URL: {url}")
         
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=DATA_FETCH_TIMEOUT)
         
         print(f"     Status: {response.status_code}")
         
@@ -686,7 +795,7 @@ def fetch_entity_sample(entity_name, entity_info, service_url, headers, sample_s
                 # Convert sets to lists and limit
                 sample_values = {}
                 for key, values in property_values.items():
-                    sample_values[key] = list(values)[:5]  # Keep max 5 unique values per property
+                    sample_values[key] = list(values) if max_sample_values == -1 else list(values)[:max_sample_values]
                 
                 entity_samples[entity_name] = {
                     'record_count': len(records),
@@ -741,16 +850,21 @@ def generate_utterances():
         count = data.get('count', 10)
         persona = data.get('persona', None)
         sample_data = data.get('sample_data', None)  # NEW: Real values from API
+        advanced_settings = data.get('advanced_settings', None)
+        
+        # Get limits
+        max_props_display = get_limit(advanced_settings, 'max_props_display', MAX_PROPERTIES_TO_DISPLAY)
         
         print(f"📝 Entity: {entity}")
         print(f"📊 Count: {count}")
+        print(f"   Max properties to display: {max_props_display}")
         if persona:
             print(f"👤 Persona: {persona.get('title', 'Unknown')}")
         if sample_data:
             print(f"✨ Using real sample data from API")
         
         if not entity or not api_key:
-            return jsonify({'error': 'Entity and API key are required'}), 400
+            return jsonify({'success': False, 'error': 'Entity and API key are required'}), 400
         
         # Get property names
         properties = entity_info.get('properties', [])
@@ -766,8 +880,29 @@ def generate_utterances():
             else:
                 nav_prop_names.append(nav)
         
+        # Get or build expandable_nav_props
         expandable_nav_props = entity_info.get('expandable_nav_props', [])
         nav_map = entity_info.get('navigation_map', {})
+        
+        # Fallback: If expandable_nav_props is not set, build it from navigation_properties
+        if not expandable_nav_props and nav_properties:
+            expandable_nav_props = []
+            nav_map = {}
+            for nav in nav_properties:
+                if isinstance(nav, dict):
+                    nav_name = nav.get('name', '')
+                    if nav_name:
+                        expandable_nav_props.append(nav_name)
+                        # Try to get target entity
+                        target_entity = nav.get('target_entity', '')
+                        if not target_entity and nav.get('relationship'):
+                            parts = nav.get('relationship', '').split('.')
+                            target_entity = parts[-1] if parts else 'Unknown'
+                        nav_map[nav_name] = target_entity or 'Unknown'
+                elif isinstance(nav, str):
+                    expandable_nav_props.append(nav)
+                    nav_map[nav] = 'Unknown'
+        
         has_relationships = len(expandable_nav_props) > 0
         
         # Build expandable relationships description
@@ -878,7 +1013,10 @@ BAD EXAMPLES (too technical):
             sample_values_context = "\n\n🎯 REAL VALUES FROM API DATABASE (MANDATORY TO USE):\n"
             sample_values_context += "="*60 + "\n"
             
-            for prop, values in list(sample_data['sample_values'].items())[:25]:  # Show more properties
+            sample_items = list(sample_data['sample_values'].items())
+            display_items = sample_items if max_props_display == -1 else sample_items[:max_props_display]
+            
+            for prop, values in display_items:
                 if values and len(values) > 0:
                     # Format values nicely
                     formatted_values = ', '.join([f"'{v}'" if isinstance(v, str) else str(v) for v in values[:8]])
@@ -914,6 +1052,84 @@ BAD EXAMPLES (inventing values):
 - For best results, fetch sample data first using the "📊 Fetch Sample Data" button
 """
         
+        # Build navigation context for cross-entity queries
+        nav_context = ""
+        if expandable_nav_props:
+            nav_context = f"\n\n🔗 CROSS-ENTITY NAVIGATION CAPABILITIES:\n"
+            nav_context += "="*60 + "\n"
+            nav_context += f"This entity has {len(expandable_nav_props)} navigation properties for cross-entity queries:\n\n"
+            
+            for nav_prop in expandable_nav_props[:10]:
+                target = nav_map.get(nav_prop, 'Unknown')
+                nav_context += f"• {nav_prop} → {target}\n"
+            
+            nav_context += "\n" + "="*60 + "\n"
+            nav_context += """
+🎯 CROSS-ENTITY QUERY PATTERNS (Use these for 40-50% of queries):
+
+1. **$expand (Fetch Related Data)**
+   Pattern: /{entity}?$expand={NavProperty}
+   Example: /Orders?$expand=Customer
+   Use: "Get orders with customer details"
+
+2. **Navigation Path (Direct Access)**
+   Pattern: /{entity}(key)/{NavProperty}
+   Example: /Orders(12345)/Items
+   Use: "Show items for order 12345"
+
+3. **Filter on Related Entity**
+   Pattern: /{entity}?$filter={NavProperty}/{Property} eq 'value'
+   Example: /Orders?$filter=Customer/Country eq 'US'
+   Use: "Show orders from US customers"
+
+4. **$expand with $select (Optimized)**
+   Pattern: /{entity}?$expand={NavProperty}($select={Field1},{Field2})
+   Example: /Orders?$expand=Customer($select=Name,Email)
+   Use: "Get orders with just customer name and email"
+
+5. **$expand with $filter (Filtered Related)**
+   Pattern: /{entity}?$expand={NavProperty}($filter={Condition})
+   Example: /Customers?$expand=Orders($filter=Status eq 'Shipped')
+   Use: "Show customers with their shipped orders"
+
+6. **Multiple $expand (Multiple Relations)**
+   Pattern: /{entity}?$expand={Nav1},{Nav2}
+   Example: /Orders?$expand=Customer,Items
+   Use: "Get orders with both customer and items"
+
+7. **Nested $expand (Multi-hop)**
+   Pattern: /{entity}?$expand={Nav1}($expand={Nav2})
+   Example: /Orders?$expand=Customer($expand=Country)
+   Use: "Get orders with customer and their country details"
+
+8. **Any/All on Collections**
+   Pattern: /{entity}?$filter={NavProperty}/any(x: x/{Property} eq 'value')
+   Example: /Customers?$filter=Orders/any(o: o/Status eq 'Pending')
+   Use: "Show customers who have pending orders"
+
+9. **Count with Navigation**
+   Pattern: /{entity}?$filter={NavProperty}/$count gt 5
+   Example: /Customers?$filter=Orders/$count gt 5
+   Use: "Show customers with more than 5 orders"
+
+10. **Combined Filters (Entity + Related)**
+    Pattern: /{entity}?$filter={Property} eq 'A' and {NavProperty}/{Property} eq 'B'
+    Example: /Orders?$filter=Status eq 'Open' and Customer/Type eq 'Premium'
+    Use: "Show open orders from premium customers"
+
+🚨 CRITICAL INSTRUCTIONS FOR CROSS-ENTITY QUERIES:
+- Use navigation properties from the list above
+- Combine $expand with $filter, $select, $orderby for powerful queries
+- Generate diverse patterns - don't just use $expand alone
+- Create realistic business scenarios that span entities
+- 40-50% of generated queries should use cross-entity features
+"""
+        else:
+            nav_context = """
+ℹ️ This entity has no navigation properties.
+Generate single-entity queries only using $filter, $select, $orderby, $top, $skip.
+"""
+        
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
@@ -926,46 +1142,58 @@ BAD EXAMPLES (inventing values):
 Entity: {entity}
 Key Fields: {entity_info.get('keys', [])}
 Sample Properties: {prop_names[:15]}
-Navigation Properties: {entity_info.get('navigation_properties', [])}
+Navigation Properties: {expandable_nav_props}
+
+{nav_context}
 
 {sample_values_context}
 
 Create diverse queries with varying complexity:
 
-SIMPLE (40% - everyday queries):
+SIMPLE (30% - everyday queries):
 - Natural, conversational questions
 - Basic data retrieval without filters (to ensure results)
 - Simple filters **ONLY using the exact values from the REAL VALUES list above**
 Examples: 
   • "Show me all {entity}" → /{entity}?$top=20
   • "Get the first 10 {entity}" → /{entity}?$top=10
-  • If Status=['ACTIVE']: "Show active records" → $filter=Status eq 'ACTIVE'
+  • If Status=['ACTIVE']: "Show active records" → /{entity}?$filter=Status eq 'ACTIVE'
 
-MEDIUM (40% - specific business queries):
+MEDIUM (30% - specific business queries):
 - Filtering by specific criteria
 - Sorting and organizing results
 - Selecting relevant fields
 Examples: "Show customers in New York sorted by name", "Get my top 10 orders by value"
 
-COMPLEX (20% - advanced analysis):
-- Multiple conditions
-- Data relationships
-- Aggregations
-Examples: "Show customers who ordered more than 5 times and include their addresses", "Get high-value orders with customer details"
+COMPLEX (30% - cross-entity relationship queries):
+- Use $expand to fetch related data
+- Filter on related entity properties
+- Navigate to related entities
+- Use any/all patterns for collection filtering
+Examples: "Orders with customer details", "Customers who have pending orders", "Orders from US customers"
+
+ADVANCED (10% - multi-hop complex analysis):
+- Multiple navigation hops
+- Combined filters across entities
+- Nested $expand with filters
+- Collection predicates (any/all)
+Examples: "Orders with customer and shipping details", "Customers with high-value orders including items"
 
 IMPORTANT: 
 - Use natural, conversational language
 - Avoid technical jargon unless the persona is technical
 - Make queries sound like real user requests
 - Include common business scenarios
+- Generate diverse cross-entity patterns (not just simple $expand)
 
 Return ONLY valid JSON array:
 [
   {{
     "utterance": "Natural conversational query",
     "suggested_endpoint": "/{entity}?$filter=...",
-    "complexity": "simple",
-    "operations_used": ["GET", "$filter"]
+    "complexity": "simple|medium|complex|advanced",
+    "operations_used": ["GET", "$filter", "$expand"],
+    "cross_entity": true|false
   }}
 ]"""
             }]
@@ -1065,12 +1293,170 @@ Return ONLY valid JSON array:
         
     except json.JSONDecodeError as e:
         print(f"❌ JSON error: {str(e)}")
-        return jsonify({'error': f'Failed to parse response: {str(e)}', 'raw': utterances_text[:500]}), 500
+        raw_response = utterances_text[:500] if 'utterances_text' in locals() else "No response captured"
+        return jsonify({'success': False, 'error': f'Failed to parse response: {str(e)}', 'raw': raw_response}), 500
     except Exception as e:
         print(f"❌ Error: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/generate-custom-utterance', methods=['POST'])
+def generate_custom_utterance():
+    """Generate OData endpoint for a single custom utterance"""
+    print("\n" + "="*60)
+    print("✍️ GENERATE CUSTOM UTTERANCE")
+    print("="*60)
+    
+    try:
+        data = request.json
+        entity = data.get('entity')
+        entity_info = data.get('entity_info', {})
+        utterance_text = data.get('utterance', '')
+        api_key = data.get('api_key')
+        sample_data = data.get('sample_data', None)
+        advanced_settings = data.get('advanced_settings', None)
+        
+        # Get limits
+        max_props_display = get_limit(advanced_settings, 'max_props_display', MAX_PROPERTIES_TO_DISPLAY)
+        
+        print(f"📝 Entity: {entity}")
+        print(f"💬 Utterance: {utterance_text}")
+        
+        if not entity or not utterance_text or not api_key:
+            return jsonify({'success': False, 'error': 'Entity, utterance, and API key are required'}), 400
+        
+        # Get property names
+        properties = entity_info.get('properties', [])
+        prop_names = [p['name'] if isinstance(p, dict) else p for p in properties]
+        
+        # Get navigation properties
+        nav_properties = entity_info.get('navigation_properties', [])
+        expandable_nav_props = entity_info.get('expandable_nav_props', [])
+        nav_map = entity_info.get('navigation_map', {})
+        
+        # Fallback: Build expandable_nav_props if not set
+        if not expandable_nav_props and nav_properties:
+            expandable_nav_props = []
+            nav_map = {}
+            for nav in nav_properties:
+                if isinstance(nav, dict):
+                    nav_name = nav.get('name', '')
+                    if nav_name:
+                        expandable_nav_props.append(nav_name)
+                        target_entity = nav.get('target_entity', '')
+                        if not target_entity and nav.get('relationship'):
+                            parts = nav.get('relationship', '').split('.')
+                            target_entity = parts[-1] if parts else 'Unknown'
+                        nav_map[nav_name] = target_entity or 'Unknown'
+        
+        has_relationships = len(expandable_nav_props) > 0
+        
+        print(f"  🔗 Navigation properties: {len(expandable_nav_props)}")
+        if expandable_nav_props:
+            print(f"      Nav props: {', '.join(expandable_nav_props[:5])}")
+        
+        # Build sample values context
+        sample_values_context = ""
+        if sample_data and 'sample_values' in sample_data and sample_data['sample_values']:
+            sample_values_context = "\n\n🎯 REAL VALUES FROM DATABASE:\n"
+            sample_items = list(sample_data['sample_values'].items())
+            display_items = sample_items if max_props_display == -1 else sample_items[:max_props_display]
+            
+            for prop, values in display_items:
+                if values and len(values) > 0:
+                    formatted_values = ', '.join([f"'{v}'" if isinstance(v, str) else str(v) for v in values[:8]])
+                    sample_values_context += f"• {prop}: {formatted_values}\n"
+        
+        # Build navigation context
+        nav_context = ""
+        if has_relationships:
+            nav_context = f"\n\n🔗 AVAILABLE NAVIGATION PROPERTIES:\n"
+            for nav_prop in expandable_nav_props[:10]:
+                target = nav_map.get(nav_prop, 'Unknown')
+                nav_context += f"• {nav_prop} → {target}\n"
+        
+        client = anthropic.Anthropic(api_key=api_key)
+        
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2048,
+            messages=[{
+                "role": "user",
+                "content": f"""Generate an OData endpoint for this query:
+
+Entity: {entity}
+Properties: {', '.join(prop_names[:15])}
+Navigation Properties: {', '.join(expandable_nav_props[:10])}
+
+{nav_context}
+{sample_values_context}
+
+User's Query: "{utterance_text}"
+
+Generate the appropriate OData endpoint that fulfills this query. Use:
+- $filter for filtering
+- $select for choosing specific fields
+- $orderby for sorting
+- $top for limiting results
+- $skip for pagination
+- $expand for related data (if navigation properties are available)
+- $filter with navigation properties (e.g., Customer/Country eq 'US')
+- Navigation paths (e.g., /Orders(123)/Items)
+- any/all for collection filtering
+
+If sample values are provided above, use ONLY those exact values in filters.
+
+Determine the complexity level:
+- simple: Basic retrieval, simple filter
+- medium: Multiple filters, sorting, field selection
+- complex: Uses cross-entity features ($expand, nav paths, filters on related entities)
+- advanced: Multiple hops, nested $expand, any/all predicates
+
+Return ONLY valid JSON (no markdown):
+{{
+  "utterance": "{utterance_text}",
+  "suggested_endpoint": "/{entity}?...",
+  "complexity": "simple|medium|complex|advanced",
+  "operations_used": ["GET", "$filter", ...],
+  "cross_entity": true|false,
+  "explanation": "Brief explanation of what this endpoint does"
+}}"""
+            }]
+        )
+        
+        response_text = message.content[0].text
+        
+        # Extract JSON
+        if '```json' in response_text:
+            response_text = response_text.split('```json')[1].split('```')[0].strip()
+        elif '```' in response_text:
+            response_text = response_text.split('```')[1].split('```')[0].strip()
+        
+        result = json.loads(response_text)
+        
+        # Ensure endpoint has $top
+        endpoint = result.get('suggested_endpoint', '')
+        if endpoint and '$top' not in endpoint.lower():
+            if '?' in endpoint:
+                endpoint = f"{endpoint}&$top=50"
+            else:
+                endpoint = f"{endpoint}?$top=50"
+            result['suggested_endpoint'] = endpoint
+        
+        print(f"✅ Generated endpoint: {endpoint}")
+        print("="*60 + "\n")
+        
+        return jsonify(result)
+        
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON error: {str(e)}")
+        return jsonify({'success': False, 'error': f'Failed to parse response: {str(e)}'}), 500
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/validate-endpoint', methods=['POST'])
 def validate_endpoint():
@@ -1086,7 +1472,7 @@ def validate_endpoint():
         auth_config = data.get('auth_config', {})
         
         if not service_url or not endpoint:
-            return jsonify({'error': 'Service URL and endpoint required'}), 400
+            return jsonify({'success': False, 'error': 'Service URL and endpoint required'}), 400
         
         # Construct full URL
         full_url = service_url.rstrip('/') + endpoint
@@ -1190,5 +1576,4 @@ if __name__ == '__main__':
     print("  • Manual validation to control API usage")
     print("\n📍 Server: http://localhost:5000")
     print("="*70 + "\n")
-    
-    app.run(debug=True, port=5000, host='0.0.0.0')
+    app.run(host='0.0.0.0', port=5000, debug=True)

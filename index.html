@@ -15,7 +15,7 @@
 <body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
     <div class="container mx-auto px-4 py-8 max-w-6xl">
         <div class="text-center mb-8">
-            <h1 class="text-4xl font-bold text-indigo-900 mb-2">🎯 SAP OData Utterance Generation & Validation</h1>
+            <h1 class="text-4xl font-bold text-indigo-900 mb-2">🎯 SAP OData Utterance Generator</h1>
             <p class="text-gray-600">Generate training data from OData $metadata with cross-entity query support</p>
         </div>
 
@@ -108,10 +108,11 @@
 
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">
-                        Anthropic API Key *
+                        Anthropic API Key (Required for generation)
                     </label>
                     <input type="password" id="anthropicKey" placeholder="sk-ant-..."
                         class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"/>
+                    <p class="text-xs text-gray-500 mt-1">💡 Not needed for discovery - only for generating utterances and personas</p>
                 </div>
 
                 <div>
@@ -120,6 +121,86 @@
                     </label>
                     <input type="range" id="utteranceSlider" min="5" max="30" value="10" class="w-full"/>
                 </div>
+
+                <details class="bg-gray-50 rounded-lg p-4 border border-gray-300">
+                    <summary class="cursor-pointer font-semibold text-gray-700 hover:text-indigo-600">⚙️ Advanced Settings (Optional)</summary>
+                    <div class="mt-4 space-y-4">
+                        <p class="text-sm text-gray-600 mb-3">
+                            Adjust these limits based on your entity complexity, system load, and time constraints.
+                            Higher values = more comprehensive but slower and more expensive.
+                        </p>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <div class="flex items-center justify-between mb-2">
+                                    <label class="text-sm font-medium text-gray-700">
+                                        Max Properties per Entity: <span id="maxPropertiesDisplay">30</span>
+                                    </label>
+                                    <label class="flex items-center gap-1 text-xs text-gray-600">
+                                        <input type="checkbox" id="unlimitedProperties" class="w-3 h-3">
+                                        ∞ Unlimited
+                                    </label>
+                                </div>
+                                <input type="range" id="maxPropertiesSlider" min="10" max="100" value="30" class="w-full"/>
+                                <p class="text-xs text-gray-500 mt-1">How many properties to consider for query generation</p>
+                            </div>
+                            
+                            <div>
+                                <div class="flex items-center justify-between mb-2">
+                                    <label class="text-sm font-medium text-gray-700">
+                                        Max Navigation Properties: <span id="maxNavPropsDisplay">20</span>
+                                    </label>
+                                    <label class="flex items-center gap-1 text-xs text-gray-600">
+                                        <input type="checkbox" id="unlimitedNavProps" class="w-3 h-3">
+                                        ∞ Unlimited
+                                    </label>
+                                </div>
+                                <input type="range" id="maxNavPropsSlider" min="5" max="50" value="20" class="w-full"/>
+                                <p class="text-xs text-gray-500 mt-1">How many relationships to consider for cross-entity queries</p>
+                            </div>
+                            
+                            <div>
+                                <div class="flex items-center justify-between mb-2">
+                                    <label class="text-sm font-medium text-gray-700">
+                                        Sample Values per Property: <span id="maxSampleValuesDisplay">8</span>
+                                    </label>
+                                    <label class="flex items-center gap-1 text-xs text-gray-600">
+                                        <input type="checkbox" id="unlimitedSampleValues" class="w-3 h-3">
+                                        ∞ Unlimited
+                                    </label>
+                                </div>
+                                <input type="range" id="maxSampleValuesSlider" min="3" max="20" value="8" class="w-full"/>
+                                <p class="text-xs text-gray-500 mt-1">How many example values to collect for realistic filters</p>
+                            </div>
+                            
+                            <div>
+                                <div class="flex items-center justify-between mb-2">
+                                    <label class="text-sm font-medium text-gray-700">
+                                        Properties to Display: <span id="maxPropsDisplayDisplay">40</span>
+                                    </label>
+                                    <label class="flex items-center gap-1 text-xs text-gray-600">
+                                        <input type="checkbox" id="unlimitedPropsDisplay" class="w-3 h-3">
+                                        ∞ Unlimited
+                                    </label>
+                                </div>
+                                <input type="range" id="maxPropsDisplaySlider" min="10" max="100" value="40" class="w-full"/>
+                                <p class="text-xs text-gray-500 mt-1">How many properties to show to AI in prompts</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex gap-2 mt-4 pt-4 border-t">
+                            <button type="button" id="resetAdvancedBtn" class="px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white text-sm rounded">
+                                Reset to Defaults
+                            </button>
+                            <button type="button" id="optimizeSpeedBtn" class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded">
+                                ⚡ Optimize for Speed
+                            </button>
+                            <button type="button" id="optimizeQualityBtn" class="px-4 py-2 bg-green-500 hover:bg-green-600 text-white text-sm rounded">
+                                ✨ Optimize for Quality
+                            </button>
+                        </div>
+                    </div>
+                </details>
 
                 <div class="flex gap-3 pt-4">
                     <button id="discoverBtn" 
@@ -201,6 +282,44 @@
             </div>
         </div>
 
+        <div id="customUtteranceSection" class="hidden bg-white rounded-lg shadow-lg p-6 mb-6 fade-in">
+            <h2 class="text-2xl font-semibold text-gray-800 mb-4">✍️ Create Custom Utterances</h2>
+            <p class="text-gray-600 mb-4">Type your own queries and get OData endpoints generated:</p>
+            
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Select Entities (multiple)
+                    </label>
+                    <div id="customEntityCheckboxes" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-3 bg-gray-50 rounded-lg border border-gray-300">
+                        <!-- Entity checkboxes will be populated here -->
+                    </div>
+                    <div class="mt-2">
+                        <label class="flex items-center gap-2 text-sm text-gray-600">
+                            <input type="checkbox" id="selectAllCustomEntities" class="w-4 h-4 text-indigo-600 rounded">
+                            Select All
+                        </label>
+                    </div>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Your Query (Natural Language)
+                    </label>
+                    <textarea id="customUtteranceInput" 
+                        placeholder="e.g., Show me all active customers in Germany, Get orders from last month with customer details"
+                        rows="3"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"></textarea>
+                    <p class="text-xs text-gray-500 mt-1">💡 Press Enter or click Generate to create endpoints for all selected entities</p>
+                </div>
+                
+                <button id="generateCustomBtn"
+                    class="w-full bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center gap-2">
+                    <span>🎯 Generate Endpoints</span>
+                </button>
+            </div>
+        </div>
+
         <div id="resultsSection" class="hidden bg-white rounded-lg shadow-lg p-6 fade-in">
             <div class="flex justify-between items-center mb-4">
                 <h2 class="text-2xl font-semibold text-gray-800">🎯 Generated Utterances</h2>
@@ -273,6 +392,166 @@
             document.getElementById('utteranceCount').textContent = e.target.value;
         });
 
+        // Advanced Settings Handlers
+        const advancedSettings = {
+            maxProperties: 30,
+            maxNavProps: 20,
+            maxSampleValues: 8,
+            maxPropsDisplay: 40
+        };
+
+        // Unlimited checkbox handlers
+        document.getElementById('unlimitedProperties').addEventListener('change', (e) => {
+            const slider = document.getElementById('maxPropertiesSlider');
+            const display = document.getElementById('maxPropertiesDisplay');
+            if (e.target.checked) {
+                slider.disabled = true;
+                display.textContent = '∞';
+                advancedSettings.maxProperties = -1;
+            } else {
+                slider.disabled = false;
+                display.textContent = slider.value;
+                advancedSettings.maxProperties = parseInt(slider.value);
+            }
+        });
+
+        document.getElementById('unlimitedNavProps').addEventListener('change', (e) => {
+            const slider = document.getElementById('maxNavPropsSlider');
+            const display = document.getElementById('maxNavPropsDisplay');
+            if (e.target.checked) {
+                slider.disabled = true;
+                display.textContent = '∞';
+                advancedSettings.maxNavProps = -1;
+            } else {
+                slider.disabled = false;
+                display.textContent = slider.value;
+                advancedSettings.maxNavProps = parseInt(slider.value);
+            }
+        });
+
+        document.getElementById('unlimitedSampleValues').addEventListener('change', (e) => {
+            const slider = document.getElementById('maxSampleValuesSlider');
+            const display = document.getElementById('maxSampleValuesDisplay');
+            if (e.target.checked) {
+                slider.disabled = true;
+                display.textContent = '∞';
+                advancedSettings.maxSampleValues = -1;
+            } else {
+                slider.disabled = false;
+                display.textContent = slider.value;
+                advancedSettings.maxSampleValues = parseInt(slider.value);
+            }
+        });
+
+        document.getElementById('unlimitedPropsDisplay').addEventListener('change', (e) => {
+            const slider = document.getElementById('maxPropsDisplaySlider');
+            const display = document.getElementById('maxPropsDisplayDisplay');
+            if (e.target.checked) {
+                slider.disabled = true;
+                display.textContent = '∞';
+                advancedSettings.maxPropsDisplay = -1;
+            } else {
+                slider.disabled = false;
+                display.textContent = slider.value;
+                advancedSettings.maxPropsDisplay = parseInt(slider.value);
+            }
+        });
+
+        document.getElementById('maxPropertiesSlider').addEventListener('input', (e) => {
+            if (!document.getElementById('unlimitedProperties').checked) {
+                advancedSettings.maxProperties = parseInt(e.target.value);
+                document.getElementById('maxPropertiesDisplay').textContent = e.target.value;
+            }
+        });
+
+        document.getElementById('maxNavPropsSlider').addEventListener('input', (e) => {
+            if (!document.getElementById('unlimitedNavProps').checked) {
+                advancedSettings.maxNavProps = parseInt(e.target.value);
+                document.getElementById('maxNavPropsDisplay').textContent = e.target.value;
+            }
+        });
+
+        document.getElementById('maxSampleValuesSlider').addEventListener('input', (e) => {
+            if (!document.getElementById('unlimitedSampleValues').checked) {
+                advancedSettings.maxSampleValues = parseInt(e.target.value);
+                document.getElementById('maxSampleValuesDisplay').textContent = e.target.value;
+            }
+        });
+
+        document.getElementById('maxPropsDisplaySlider').addEventListener('input', (e) => {
+            if (!document.getElementById('unlimitedPropsDisplay').checked) {
+                advancedSettings.maxPropsDisplay = parseInt(e.target.value);
+                document.getElementById('maxPropsDisplayDisplay').textContent = e.target.value;
+            }
+        });
+
+        // Reset to defaults
+        document.getElementById('resetAdvancedBtn').addEventListener('click', () => {
+            setAdvancedSettings(30, 20, 8, 40, false, false, false, false);
+        });
+
+        // Optimize for speed (lower values)
+        document.getElementById('optimizeSpeedBtn').addEventListener('click', () => {
+            setAdvancedSettings(15, 10, 5, 20, false, false, false, false);
+            addStatus('⚡ Optimized for speed - lower limits set', 'success');
+        });
+
+        // Optimize for quality (higher values)
+        document.getElementById('optimizeQualityBtn').addEventListener('click', () => {
+            setAdvancedSettings(50, 30, 15, 60, false, false, false, false);
+            addStatus('✨ Optimized for quality - higher limits set', 'success');
+        });
+
+        function setAdvancedSettings(maxProps, maxNav, maxSample, maxDisplay, unlimitedProps = false, unlimitedNav = false, unlimitedSample = false, unlimitedDisplay = false) {
+            // Properties
+            document.getElementById('unlimitedProperties').checked = unlimitedProps;
+            document.getElementById('maxPropertiesSlider').disabled = unlimitedProps;
+            if (unlimitedProps) {
+                document.getElementById('maxPropertiesDisplay').textContent = '∞';
+                advancedSettings.maxProperties = -1;
+            } else {
+                document.getElementById('maxPropertiesSlider').value = maxProps;
+                document.getElementById('maxPropertiesDisplay').textContent = maxProps;
+                advancedSettings.maxProperties = maxProps;
+            }
+
+            // Nav Props
+            document.getElementById('unlimitedNavProps').checked = unlimitedNav;
+            document.getElementById('maxNavPropsSlider').disabled = unlimitedNav;
+            if (unlimitedNav) {
+                document.getElementById('maxNavPropsDisplay').textContent = '∞';
+                advancedSettings.maxNavProps = -1;
+            } else {
+                document.getElementById('maxNavPropsSlider').value = maxNav;
+                document.getElementById('maxNavPropsDisplay').textContent = maxNav;
+                advancedSettings.maxNavProps = maxNav;
+            }
+
+            // Sample Values
+            document.getElementById('unlimitedSampleValues').checked = unlimitedSample;
+            document.getElementById('maxSampleValuesSlider').disabled = unlimitedSample;
+            if (unlimitedSample) {
+                document.getElementById('maxSampleValuesDisplay').textContent = '∞';
+                advancedSettings.maxSampleValues = -1;
+            } else {
+                document.getElementById('maxSampleValuesSlider').value = maxSample;
+                document.getElementById('maxSampleValuesDisplay').textContent = maxSample;
+                advancedSettings.maxSampleValues = maxSample;
+            }
+
+            // Props Display
+            document.getElementById('unlimitedPropsDisplay').checked = unlimitedDisplay;
+            document.getElementById('maxPropsDisplaySlider').disabled = unlimitedDisplay;
+            if (unlimitedDisplay) {
+                document.getElementById('maxPropsDisplayDisplay').textContent = '∞';
+                advancedSettings.maxPropsDisplay = -1;
+            } else {
+                document.getElementById('maxPropsDisplaySlider').value = maxDisplay;
+                document.getElementById('maxPropsDisplayDisplay').textContent = maxDisplay;
+                advancedSettings.maxPropsDisplay = maxDisplay;
+            }
+        }
+
         function addStatus(message, type = 'info') {
             const statusArea = document.getElementById('statusArea');
             const colors = {
@@ -308,12 +587,6 @@
             const serviceUrl = document.getElementById('serviceUrl').value.trim();
             const manualEntities = document.getElementById('manualEntities').value.trim();
             const authConfig = getAuthConfig();
-            const anthropicKey = document.getElementById('anthropicKey').value.trim();
-
-            if (!anthropicKey) {
-                addStatus('⚠️ Anthropic API Key is required', 'error');
-                return;
-            }
 
             if (!metadataUrl && !serviceUrl && !manualEntities) {
                 addStatus('⚠️ Please provide metadata URL, service URL, or manual entity names', 'error');
@@ -351,7 +624,8 @@
                         body: JSON.stringify({
                             metadata_url: metadataUrl,
                             service_url: serviceUrl,
-                            auth_config: authConfig
+                            auth_config: authConfig,
+                            advanced_settings: advancedSettings
                         })
                     });
 
@@ -379,22 +653,100 @@
             const content = document.getElementById('entitiesContent');
             const checkboxContainer = document.getElementById('entityCheckboxes');
             const count = Object.keys(entities).length;
+            
+            // Enrich entities with navigation property information immediately
+            Object.entries(entities).forEach(([entityName, entityInfo]) => {
+                const navProps = entityInfo.navigation_properties || [];
+                
+                if (navProps.length > 0 && !entityInfo.expandable_nav_props) {
+                    const expandable = [];
+                    const nav_map = {};
+                    const nav_details = [];
+                    
+                    navProps.forEach(nav => {
+                        if (typeof nav === 'object') {
+                            const navName = nav.name || '';
+                            if (navName) {
+                                expandable.push(navName);
+                                
+                                // Get target entity
+                                let targetEntity = nav.target_entity || '';
+                                if (!targetEntity && nav.relationship) {
+                                    const parts = nav.relationship.split('.');
+                                    targetEntity = parts[parts.length - 1];
+                                }
+                                
+                                nav_map[navName] = targetEntity || 'Unknown';
+                                nav_details.push({
+                                    name: navName,
+                                    target_entity: targetEntity || 'Unknown',
+                                    multiplicity: nav.multiplicity || '*',
+                                    relationship: nav.relationship ? nav.relationship.split('.').pop() : ''
+                                });
+                            }
+                        } else if (typeof nav === 'string') {
+                            expandable.push(nav);
+                            nav_map[nav] = 'Unknown';
+                            nav_details.push({
+                                name: nav,
+                                target_entity: 'Unknown',
+                                multiplicity: '*',
+                                relationship: ''
+                            });
+                        }
+                    });
+                    
+                    entityInfo.expandable_nav_props = expandable;
+                    entityInfo.navigation_map = nav_map;
+                    entityInfo.navigation_details = nav_details;
+                }
+            });
+            
+            // Count entities with navigation properties
+            const expandableCount = Object.values(entities).filter(e => {
+                const navProps = e.navigation_properties || [];
+                return navProps.length > 0;
+            }).length;
 
             content.innerHTML = `
                 <div class="bg-indigo-50 rounded-lg p-4 mb-4">
                     <h3 class="font-semibold text-indigo-900 mb-2">Total Entities Discovered: ${count}</h3>
                     <p class="text-sm text-indigo-700">Select entities below, then choose Quick Check or Sample Data</p>
+                    ${expandableCount > 0 ? `<p class="text-sm text-purple-700 mt-2">🔗 ${expandableCount} entities support cross-entity queries (highlighted in purple)</p>` : ''}
                 </div>
             `;
 
-            // Create checkboxes for entity selection
-            checkboxContainer.innerHTML = Object.keys(entities).map(entityName => `
-                <label class="flex items-center gap-2 p-2 hover:bg-gray-100 rounded cursor-pointer">
-                    <input type="checkbox" class="entity-checkbox w-4 h-4 text-indigo-600 rounded" 
-                           value="${entityName}" checked>
-                    <span class="text-sm text-gray-700">${entityName}</span>
-                </label>
-            `).join('');
+            // Create checkboxes for entity selection with expandable highlighting
+            checkboxContainer.innerHTML = Object.entries(entities).map(([entityName, entityInfo]) => {
+                const navProps = entityInfo.navigation_properties || [];
+                const hasNavProps = navProps.length > 0;
+                
+                // Extract navigation property names for tooltip
+                const navPropNames = navProps.map(nav => 
+                    typeof nav === 'object' ? nav.name : nav
+                ).filter(n => n).slice(0, 5);
+                
+                const moreCount = navPropNames.length > 5 ? ` +${navPropNames.length - 5} more` : '';
+                const navTooltip = hasNavProps ? `${navPropNames.join(', ')}${moreCount}` : '';
+                
+                // Style for expandable entities
+                const labelClass = hasNavProps 
+                    ? 'flex items-center gap-2 p-2 bg-purple-50 border-2 border-purple-300 hover:bg-purple-100 rounded cursor-pointer'
+                    : 'flex items-center gap-2 p-2 hover:bg-gray-100 rounded cursor-pointer';
+                
+                const expandableBadge = hasNavProps 
+                    ? `<span class="bg-purple-600 text-white text-xs px-2 py-0.5 rounded font-semibold ml-auto" title="Navigation properties: ${navTooltip}">🔗 ${navProps.length}</span>`
+                    : '';
+                
+                return `
+                    <label class="${labelClass}">
+                        <input type="checkbox" class="entity-checkbox w-4 h-4 text-indigo-600 rounded" 
+                               value="${entityName}" checked>
+                        <span class="text-sm ${hasNavProps ? 'text-purple-900 font-medium' : 'text-gray-700'}">${entityName}</span>
+                        ${expandableBadge}
+                    </label>
+                `;
+            }).join('');
 
             // Initialize selected entities (all checked by default)
             selectedEntityNames = Object.keys(entities);
@@ -490,6 +842,7 @@
                 addStatus(`✅ Checked ${data.summary.available}/${data.summary.total} entities (${data.summary.expandable} with $expand)`, 'success');
                 
                 displayQuickCheckSummary(data.entity_status, data.summary);
+                populateCustomEntitySelect();
 
             } catch (error) {
                 addStatus(`❌ ${error.message}`, 'error');
@@ -508,10 +861,14 @@
 
             const details = Object.entries(entityStatus).map(([entity, status]) => {
                 if (status.available) {
-                    const expandInfo = status.expandable_nav_props && status.expandable_nav_props.length > 0
-                        ? ` (🔗 ${status.expandable_nav_props.length} expandable: ${status.expandable_nav_props.slice(0,2).join(', ')})`
-                        : '';
-                    return `<li>✅ <strong>${entity}</strong>: ${status.record_count || 0} records${expandInfo}</li>`;
+                    // Create inline expandable indicator
+                    let expandableIndicator = '';
+                    if (status.expandable_nav_props && status.expandable_nav_props.length > 0) {
+                        const navList = status.expandable_nav_props.slice(0, 3).join(', ');
+                        const moreText = status.expandable_nav_props.length > 3 ? ` +${status.expandable_nav_props.length - 3} more` : '';
+                        expandableIndicator = `<span class="bg-purple-500 text-white text-xs px-2 py-0.5 rounded font-semibold ml-2" title="${navList}${moreText}">🔗 ${status.expandable_nav_props.length} Expandable</span>`;
+                    }
+                    return `<li>✅ <strong>${entity}</strong>${expandableIndicator}: ${status.record_count || 0} records</li>`;
                 } else {
                     return `<li>❌ <strong>${entity}</strong>: ${status.error || 'Not available'}</li>`;
                 }
@@ -539,8 +896,8 @@
                         <div class="text-sm text-red-700">Unavailable</div>
                     </div>
                 </div>
-                <details class="bg-gray-50 rounded-lg p-4">
-                    <summary class="cursor-pointer font-semibold text-gray-700">View Entity Details</summary>
+                <details class="bg-gray-50 rounded-lg p-4" open>
+                    <summary class="cursor-pointer font-semibold text-gray-700">View Entity Details (🔗 indicates cross-entity support)</summary>
                     <ul class="mt-3 space-y-1 text-sm text-gray-700">${details}</ul>
                 </details>
             `;
@@ -583,7 +940,8 @@
                         service_url: serviceUrl,
                         entities: selectedEntities,
                         auth_config: authConfig,
-                        sample_size: 5
+                        sample_size: 5,
+                        advanced_settings: advancedSettings
                     })
                 });
 
@@ -592,10 +950,21 @@
                 const data = await response.json();
                 sampleDataCache = data.samples;
                 
+                // NEW: Store navigation graph
+                const navigationGraph = data.navigation_graph || {};
+                
+                // Update discovered entities with navigation details
+                Object.keys(navigationGraph).forEach(entityName => {
+                    if (discoveredEntities[entityName]) {
+                        discoveredEntities[entityName].navigation_details = navigationGraph[entityName];
+                    }
+                });
+                
                 const successCount = data.summary.successful;
                 addStatus(`✅ Fetched sample data from ${successCount}/${data.summary.total} entities (${data.summary.with_nav_props} with $expand)!`, 'success');
                 
-                displaySampleDataSummary(sampleDataCache, data.summary);
+                displaySampleDataSummary(sampleDataCache, data.summary, navigationGraph);
+                populateCustomEntitySelect();
 
             } catch (error) {
                 addStatus(`❌ ${error.message}`, 'error');
@@ -605,7 +974,7 @@
             }
         });
 
-        function displaySampleDataSummary(samples, summary) {
+        function displaySampleDataSummary(samples, summary, navigationGraph = {}) {
             const section = document.getElementById('sampleDataSection');
             const summaryDiv = document.getElementById('sampleDataSummary');
 
@@ -614,16 +983,29 @@
             let emptyCount = 0;
 
             const details = Object.entries(samples).map(([entity, sample]) => {
+                const navDetails = navigationGraph[entity] || [];
+                const hasNav = navDetails.length > 0;
+                
+                // Create inline expandable indicator
+                let expandableIndicator = '';
+                if (hasNav) {
+                    const navList = navDetails.map(nav => 
+                        `${nav.name} → ${nav.target_entity}`
+                    ).slice(0, 3).join(', ');
+                    const moreCount = navDetails.length > 3 ? ` +${navDetails.length - 3} more` : '';
+                    expandableIndicator = `<span class="bg-purple-500 text-white text-xs px-2 py-0.5 rounded font-semibold ml-2" title="${navList}${moreCount}">🔗 ${navDetails.length} Expandable</span>`;
+                }
+                
                 if (sample.error) {
                     failCount++;
-                    return `<li>❌ <strong>${entity}</strong>: ${sample.error}</li>`;
+                    return `<li>❌ <strong>${entity}</strong>${expandableIndicator}: ${sample.error}</li>`;
                 } else if (sample.record_count > 0) {
                     successCount++;
                     const propCount = Object.keys(sample.sample_values || {}).length;
-                    return `<li>✅ <strong>${entity}</strong>: ${sample.record_count} records, ${propCount} properties</li>`;
+                    return `<li>✅ <strong>${entity}</strong>${expandableIndicator}: ${sample.record_count} records, ${propCount} properties</li>`;
                 } else {
                     emptyCount++;
-                    return `<li>⚠️ <strong>${entity}</strong>: No records (empty)</li>`;
+                    return `<li>⚠️ <strong>${entity}</strong>${expandableIndicator}: No records (empty)</li>`;
                 }
             }).join('');
 
@@ -631,7 +1013,7 @@
                 <div class="bg-green-50 border-l-4 border-green-500 p-4 mb-4">
                     <p class="text-sm text-green-900">
                         <strong>✅ Sample Data Ready</strong><br>
-                        Real values fetched from ${successCount} entities (${summary.with_nav_props} support cross-entity $expand).<br>
+                        Real values fetched from ${successCount} entities (${summary.with_nav_props} support cross-entity queries).<br>
                         Utterances will use actual values from your database for guaranteed results!
                     </p>
                 </div>
@@ -649,8 +1031,8 @@
                         <div class="text-sm text-red-700">Failed</div>
                     </div>
                 </div>
-                <details class="bg-gray-50 rounded-lg p-4">
-                    <summary class="cursor-pointer font-semibold text-gray-700">View Details</summary>
+                <details class="bg-gray-50 rounded-lg p-4" open>
+                    <summary class="cursor-pointer font-semibold text-gray-700">View Entity Details (🔗 indicates cross-entity support)</summary>
                     <ul class="mt-3 space-y-1 text-sm text-gray-700">${details}</ul>
                 </details>
             `;
@@ -836,7 +1218,8 @@
                                     api_key: anthropicKey,
                                     count: utteranceCount,
                                     persona: persona,
-                                    sample_data: sampleDataCache[entity] || null
+                                    sample_data: sampleDataCache[entity] || null,
+                                    advanced_settings: advancedSettings
                                 })
                             });
 
@@ -856,7 +1239,8 @@
                                 entity_info: discoveredEntities[entity],
                                 api_key: anthropicKey,
                                 count: utteranceCount,
-                                sample_data: sampleDataCache[entity] || null
+                                sample_data: sampleDataCache[entity] || null,
+                                advanced_settings: advancedSettings
                             })
                         });
 
@@ -876,10 +1260,160 @@
             }
         }
 
+        // Custom Utterance Generation
+        let selectedCustomEntities = [];
+        
+        function populateCustomEntitySelect() {
+            const checkboxContainer = document.getElementById('customEntityCheckboxes');
+            const entityNames = Object.keys(discoveredEntities);
+            
+            if (entityNames.length > 0) {
+                checkboxContainer.innerHTML = entityNames.map(name => {
+                    const entityInfo = discoveredEntities[name];
+                    const navProps = entityInfo.navigation_properties || [];
+                    const hasNavProps = navProps.length > 0;
+                    
+                    // Style for expandable entities
+                    const labelClass = hasNavProps 
+                        ? 'flex items-center gap-2 p-2 bg-purple-50 border border-purple-200 hover:bg-purple-100 rounded cursor-pointer'
+                        : 'flex items-center gap-2 p-2 hover:bg-gray-100 rounded cursor-pointer border border-gray-200';
+                    
+                    const expandableBadge = hasNavProps 
+                        ? `<span class="text-purple-600 text-xs ml-auto">🔗</span>`
+                        : '';
+                    
+                    return `
+                        <label class="${labelClass}">
+                            <input type="checkbox" class="custom-entity-checkbox w-4 h-4 text-teal-600 rounded" 
+                                   value="${name}">
+                            <span class="text-xs ${hasNavProps ? 'text-purple-900 font-medium' : 'text-gray-700'}">${name}</span>
+                            ${expandableBadge}
+                        </label>
+                    `;
+                }).join('');
+                
+                // Initialize selected entities (none checked by default)
+                selectedCustomEntities = [];
+                
+                // Add event listeners
+                document.querySelectorAll('.custom-entity-checkbox').forEach(checkbox => {
+                    checkbox.addEventListener('change', updateSelectedCustomEntities);
+                });
+                
+                document.getElementById('selectAllCustomEntities').addEventListener('change', (e) => {
+                    document.querySelectorAll('.custom-entity-checkbox').forEach(cb => {
+                        cb.checked = e.target.checked;
+                    });
+                    updateSelectedCustomEntities();
+                });
+                
+                document.getElementById('customUtteranceSection').classList.remove('hidden');
+            }
+        }
+        
+        function updateSelectedCustomEntities() {
+            selectedCustomEntities = Array.from(document.querySelectorAll('.custom-entity-checkbox:checked'))
+                .map(cb => cb.value);
+            
+            const selectAll = document.getElementById('selectAllCustomEntities');
+            const allCheckboxes = document.querySelectorAll('.custom-entity-checkbox');
+            const checkedCount = selectedCustomEntities.length;
+            selectAll.checked = checkedCount === allCheckboxes.length;
+            selectAll.indeterminate = checkedCount > 0 && checkedCount < allCheckboxes.length;
+            
+            console.log(`Selected ${selectedCustomEntities.length} entities for custom utterance`);
+        }
+
+        async function generateCustomUtterance() {
+            const utteranceText = document.getElementById('customUtteranceInput').value.trim();
+            const anthropicKey = document.getElementById('anthropicKey').value.trim();
+            
+            if (selectedCustomEntities.length === 0) {
+                addStatus('⚠️ Please select at least one entity', 'error');
+                return;
+            }
+            
+            if (!utteranceText) {
+                addStatus('⚠️ Please enter your query', 'error');
+                return;
+            }
+            
+            if (!anthropicKey) {
+                addStatus('⚠️ Anthropic API Key required', 'error');
+                return;
+            }
+            
+            const btn = document.getElementById('generateCustomBtn');
+            setLoading(btn, true, 'Generating...');
+            addStatus(`🎯 Generating endpoints for ${selectedCustomEntities.length} entities...`, 'info');
+            
+            try {
+                for (const entityName of selectedCustomEntities) {
+                    addStatus(`📝 Generating for ${entityName}...`, 'info');
+                    
+                    const response = await fetch(`${API_BASE}/generate-custom-utterance`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            entity: entityName,
+                            entity_info: discoveredEntities[entityName],
+                            utterance: utteranceText,
+                            api_key: anthropicKey,
+                            sample_data: sampleDataCache[entityName] || null,
+                            advanced_settings: advancedSettings
+                        })
+                    });
+                    
+                    if (!response.ok) throw new Error(`Failed for ${entityName}`);
+                    
+                    const data = await response.json();
+                    
+                    // Add to dataset with custom flag
+                    generatedDataset.push({
+                        ...data,
+                        entity: entityName,
+                        custom: true
+                    });
+                }
+                
+                displayResults(generatedDataset);
+                addStatus(`✅ Generated ${selectedCustomEntities.length} custom utterances!`, 'success');
+                
+                // Clear input
+                document.getElementById('customUtteranceInput').value = '';
+                
+            } catch (error) {
+                addStatus(`❌ ${error.message}`, 'error');
+            } finally {
+                setLoading(btn, false, '🎯 Generate Endpoints');
+            }
+        }
+
+        document.getElementById('generateCustomBtn').addEventListener('click', generateCustomUtterance);
+        
+        // Handle Enter key in textarea
+        document.getElementById('customUtteranceInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                generateCustomUtterance();
+            }
+        });
+
         function displayResults(dataset) {
             const section = document.getElementById('resultsSection');
             const statsBar = document.getElementById('statsBar');
             const content = document.getElementById('resultsContent');
+            
+            // Helper function for complexity colors
+            function getComplexityColor(complexity) {
+                const colors = {
+                    'simple': 'bg-green-100 text-green-800',
+                    'medium': 'bg-blue-100 text-blue-800',
+                    'complex': 'bg-orange-100 text-orange-800',
+                    'advanced': 'bg-red-100 text-red-800'
+                };
+                return colors[complexity] || 'bg-gray-100 text-gray-800';
+            }
 
             const byComplexity = dataset.reduce((acc, d) => {
                 acc[d.complexity] = (acc[d.complexity] || 0) + 1;
@@ -889,7 +1423,17 @@
             const validated = dataset.filter(d => d.validated === true).length;
             const failed = dataset.filter(d => d.validated === false).length;
             const untested = dataset.filter(d => d.validated === undefined).length;
-            const withExpand = dataset.filter(d => d.suggested_endpoint && d.suggested_endpoint.includes('$expand')).length;
+            
+            // Count cross-entity queries with various patterns
+            const crossEntity = dataset.filter(d => {
+                const endpoint = d.suggested_endpoint || '';
+                return d.cross_entity || 
+                    endpoint.includes('$expand') || 
+                    endpoint.includes('/any(') || 
+                    endpoint.includes('/all(') ||
+                    /\/\w+\(/.test(endpoint) || 
+                    /\$filter=\w+\/\w+/.test(endpoint);
+            }).length;
 
             statsBar.innerHTML = `
                 <div class="grid grid-cols-2 md:grid-cols-6 gap-4">
@@ -898,8 +1442,8 @@
                         <div class="text-sm text-gray-600">Total</div>
                     </div>
                     <div class="text-center bg-white p-3 rounded-lg">
-                        <div class="text-3xl font-bold text-purple-600">${withExpand}</div>
-                        <div class="text-sm text-gray-600">🔗 Cross-entity</div>
+                        <div class="text-3xl font-bold text-purple-600">${crossEntity}</div>
+                        <div class="text-sm text-gray-600">🔗 Cross-Entity</div>
                     </div>
                     <div class="text-center bg-white p-3 rounded-lg">
                         <div class="text-3xl font-bold text-green-600">${validated}</div>
@@ -937,11 +1481,35 @@
                 const personaBadge = item.persona ? 
                     `<span class="bg-orange-100 text-orange-800 text-xs px-2 py-1 rounded">👤 ${item.persona}</span>` : '';
                 
+                const customBadge = item.custom ?
+                    `<span class="bg-teal-100 text-teal-800 text-xs px-2 py-1 rounded">✍️ Custom</span>` : '';
+                
                 const warningBadge = item.warning ? 
                     `<span class="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded" title="${item.warning}">⚠️ Modified</span>` : '';
                 
-                const expandBadge = item.suggested_endpoint && item.suggested_endpoint.includes('$expand') ?
-                    '<span class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded">🔗 Cross-entity</span>' : '';
+                // Detect cross-entity queries - check for various patterns
+                const endpoint = item.suggested_endpoint || '';
+                const isCrossEntity = item.cross_entity || 
+                    endpoint.includes('$expand') || 
+                    endpoint.includes('/any(') || 
+                    endpoint.includes('/all(') ||
+                    /\/\w+\(/.test(endpoint) || // Navigation like /Orders(123)/Items
+                    /\$filter=\w+\/\w+/.test(endpoint); // Filter on nav prop like Customer/Country
+                
+                const crossEntityBadge = isCrossEntity ?
+                    `<span class="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded" title="Uses cross-entity navigation">🔗 Cross-Entity</span>` : '';
+                
+                // Detect specific cross-entity patterns for tooltip
+                let crossEntityDetails = '';
+                if (isCrossEntity) {
+                    const patterns = [];
+                    if (endpoint.includes('$expand')) patterns.push('$expand');
+                    if (endpoint.includes('/any(')) patterns.push('any()');
+                    if (endpoint.includes('/all(')) patterns.push('all()');
+                    if (/\/\w+\(/.test(endpoint)) patterns.push('nav-path');
+                    if (/\$filter=\w+\/\w+/.test(endpoint)) patterns.push('nav-filter');
+                    crossEntityDetails = patterns.length > 0 ? ` (${patterns.join(', ')})` : '';
+                }
                 
                 return `
                 <div class="${statusClass} rounded-lg p-4 border hover:shadow-md transition" data-index="${index}">
@@ -949,8 +1517,9 @@
                         <div class="flex-1">
                             <div class="flex items-center gap-2 mb-2">
                                 <span class="bg-indigo-100 text-indigo-800 text-xs px-2 py-1 rounded">${item.entity}</span>
-                                <span class="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded">${item.complexity}</span>
-                                ${expandBadge}
+                                <span class="${getComplexityColor(item.complexity)} text-xs px-2 py-1 rounded">${item.complexity}</span>
+                                ${crossEntityBadge}
+                                ${customBadge}
                                 ${personaBadge}
                                 ${warningBadge}
                                 ${statusBadge}
